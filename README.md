@@ -2,11 +2,6 @@
 
 ![Python](https://img.shields.io/badge/python-3.11-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
-无源项齐次 Dirichlet 验证 FEM 精度，解析解可得： $$ u_{\text{exact}}(x, y, t) = e^{-2\alpha \pi^2 t}\sin(\pi x)\sin(\pi y) $$
-带源项制造解问题 $$ u_{\text{exact}}(x, y, t) = e^{-t}\sin(\pi x)\sin(\pi y), \quad f(x, y, t) = (-1 + 2\alpha\pi^2) e^{-t}\sin(\pi x)\sin(\pi y) $$
-局部热源扩散问题 初始条件高斯分布，时间相关局部热源： $$ u(x, y, 0) = \exp\left(-\frac{(x - x_c)^2 + (y - y_c)^2}{2\sigma^2}\right) $$ $$ f(x, y, t) = A\exp\left(-\frac{(x - x_s)^2 + (y - y_s)^2}{2\sigma_s^2}\right)\exp(-\beta t) $$
-非齐次边界温度驱动 左边界高温，其他边界低温，模拟热量扩散。
-
 本项目探索传统数值方法 **Galerkin 有限元方法（FEM）** 与 **物理信息神经网络（PINN）** 在二维非稳态热传导方程求解上的性能差异。对比维度包括求解精度、计算开销、连续场重建能力及物理约束满足程度。
 
 > 当前项目处于开发初期，README 将随着代码实现、实验结果和可视化内容持续更新。
@@ -149,7 +144,27 @@ $$
 
 ### 4. 非齐次边界温度驱动
 
-左边界高温，其他边界低温，模拟热量扩散。
+左边界高温，其他边界低温，模拟边界温差驱动下的热量扩散：
+
+$$
+u(0, y, t) = T_{\text{hot}}
+$$
+
+$$
+u(1, y, t) = T_{\text{cold}}, \quad u(x, 0, t) = T_{\text{cold}}, \quad u(x, 1, t) = T_{\text{cold}}
+$$
+
+初始条件设置为全区域低温：
+
+$$
+u(x, y, 0) = T_{\text{cold}}
+$$
+
+热源项设置为零：
+
+$$
+f(x, y, t) = 0
+$$
 
 ---
 
