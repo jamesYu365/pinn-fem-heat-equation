@@ -3,8 +3,6 @@
 ![Python](https://img.shields.io/badge/python-3.11-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 **二维非稳态热传导方程求解：Galerkin FEM 与 PINN 对比研究**
-项目时间：2026-04 ~ 2026-05
-角色：算法开发者
 
 本项目探索传统数值方法 **Galerkin 有限元方法（FEM）** 与 **物理信息神经网络（PINN）** 在二维非稳态热传导方程求解上的性能差异。对比维度包括求解精度、计算开销、连续场重建能力及物理约束满足程度。
 
