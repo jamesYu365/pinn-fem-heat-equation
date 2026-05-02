@@ -178,9 +178,17 @@ $$
 \int_{\Omega} \frac{\partial u}{\partial t} v \, d\Omega + \int_{\Omega} \alpha \nabla u \cdot \nabla v \, d\Omega = \int_{\Omega} f v \, d\Omega
 $$
 
-空间离散：$u_h(x, y, t) = \sum_j U_j(t)\phi_j(x, y)$
+空间离散：
 
-半离散系统：$M \frac{dU}{dt} + KU = F$
+$$
+u_h(x, y, t) = \sum_j U_j(t)\phi_j(x, y)
+$$
+
+半离散系统：
+
+$$
+M \frac{dU}{dt} + KU = F
+$$
 
 时间推进（隐式 Euler）：
 
@@ -190,7 +198,11 @@ $$
 
 **PINN**
 
-网络近似温度场：$u_\theta(x, y, t) \approx u(x, y, t)$
+网络近似温度场：
+
+$$
+u_\theta(x, y, t) \approx u(x, y, t)
+$$
 
 PDE 残差：
 
