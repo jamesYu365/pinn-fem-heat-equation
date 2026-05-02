@@ -1,8 +1,5 @@
 # 参考文献与公式笔记
 
-> 文件创建日期：2026-05-01  
-> 作者：算法开发者
-
 ## 1. FEM 与 PINN 相关文献
 
 1. Raissi, M., Perdikaris, P., & Karniadakis, G. E. (2019). Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations. *Journal of Computational Physics*, 378, 686–707.

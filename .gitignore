@@ -1,0 +1,10 @@
+# 实验结果（按需手动保存）
+results/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,14 @@
+domain:
+  Lx: 1.0
+  Ly: 1.0
+
+fem:
+  nx: 20
+  ny: 20
+  dt: 0.01
+  T_end: 0.5
+
+physics:
+  alpha: 0.01
+
+case: 1
