@@ -159,7 +159,7 @@ def main():
         train_x_r, train_y_r, train_t_r,
         train_x_ic, train_y_ic,
         train_x_bc, train_y_bc, train_t_bc,
-        alpha_t, pinn_cfg["epochs"], pinn_cfg["lr"],
+        alpha_t, pinn_cfg["epochs"], pinn_cfg.get("lr", pinn_cfg["peak_lr"]),
         loss_weights, log_every=pinn_cfg["log_every"], device=device,
         clip_grad_norm=pinn_cfg.get("clip_grad_norm", None),
         val_data=val_data,
@@ -167,6 +167,8 @@ def main():
         early_stop_patience=pinn_cfg.get("early_stop_patience", None),
         adaptive_loss=pinn_cfg.get("adaptive_loss", None),
         warmup_epochs=pinn_cfg.get("warmup_epochs", 0),
+        peak_lr=pinn_cfg.get("peak_lr"),
+        end_lr=pinn_cfg.get("end_lr"),
     )
 
     # 加载最优模型
@@ -228,7 +230,8 @@ def main():
         "layers": layers,
         "total_params": total_params,
         "epochs": pinn_cfg["epochs"],
-        "lr": pinn_cfg["lr"],
+        "peak_lr": pinn_cfg["peak_lr"],
+        "end_lr": pinn_cfg.get("end_lr", 0.0),
         "warmup_epochs": pinn_cfg.get("warmup_epochs", 0),
         "clip_grad_norm": pinn_cfg.get("clip_grad_norm", None),
         "adaptive_loss": pinn_cfg.get("adaptive_loss", None),

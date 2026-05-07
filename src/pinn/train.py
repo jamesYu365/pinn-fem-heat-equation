@@ -1,6 +1,7 @@
 import torch
 import copy
 from .loss import component_losses
+from .lr_scheduler import WarmupLinearScheduler
 
 
 class AdaptiveLossBalancer:
@@ -29,7 +30,8 @@ class AdaptiveLossBalancer:
         detached = {name: losses[name].detach().clamp_min(self.eps) for name in self.base_weights}
         if self.ema_losses is None:
             self.ema_losses = detached
-        else:
+            self.current_weights = dict(self.base_weights)
+            return self.current_weights
             self.ema_losses = {
                 name: self.beta * self.ema_losses[name] + (1.0 - self.beta) * detached[name]
                 for name in self.base_weights
@@ -68,27 +70,21 @@ def _serialize_components(losses, weights):
 def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
           alpha, epochs, lr, loss_weights, log_every=1000, device="cpu",
           clip_grad_norm=None, val_data=None, eval_callback=None,
-          early_stop_patience=None, adaptive_loss=None, warmup_epochs=0):
+          early_stop_patience=None, adaptive_loss=None, warmup_epochs=0,
+          peak_lr=None, end_lr=None):
     """PINN 训练循环。
 
     参数:
-        val_data: 验证集字典，每 epoch 评估随机配点验证损失。
-        eval_callback: 回调函数 fn(model, epoch)，每 log_every 步调用。
-        early_stop_patience: 验证损失连续不下降的 epoch 数，超过则停止。
-                             为 None 时不启用 early stop。
-        adaptive_loss: 自适应损失权重配置；None 时使用固定 lambda。
-        warmup_epochs: 学习率从 0 线性升到 lr 的 epoch 数。
-
-    返回:
-        loss_history: 每步训练总损失列表
-        components_history: 每步各分量损失列表
-        val_history: 每步验证总损失列表
-        best_state: 验证损失最低时的模型 state_dict
+        peak_lr: warmup 到达的最大学习率；为 None 时使用 lr（向后兼容）。
+        end_lr: 衰减结束时的学习率；为 None 时使用 lr（不衰减）。
+        其余参数同前。
     """
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    peak_lr = float(peak_lr if peak_lr is not None else lr)
+    end_lr = float(end_lr if end_lr is not None else lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=peak_lr)
+    scheduler = WarmupLinearScheduler(optimizer, peak_lr, end_lr, epochs, warmup_epochs)
     adaptive_loss = adaptive_loss or {}
     balancer = AdaptiveLossBalancer(loss_weights, **adaptive_loss)
-    warmup_epochs = int(warmup_epochs or 0)
 
     loss_history = []
     components_history = []
@@ -101,11 +97,7 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
 
     model.train()
     for epoch in range(1, epochs + 1):
-        if warmup_epochs > 0:
-            lr_scale = min(1.0, epoch / float(warmup_epochs))
-            for group in optimizer.param_groups:
-                group["lr"] = lr * lr_scale
-
+        scheduler.step(epoch)
         optimizer.zero_grad()
         losses = component_losses(
             model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha,

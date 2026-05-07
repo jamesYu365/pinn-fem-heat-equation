@@ -12,6 +12,19 @@ import matplotlib.pyplot as plt
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
+def _is_structured_grid(nodes, side):
+    """验证节点是否构成 side×side 的规则网格。"""
+    x = nodes[:, 0]
+    y = nodes[:, 1]
+    x_sorted = np.sort(np.unique(x))
+    y_sorted = np.sort(np.unique(y))
+    if len(x_sorted) != side or len(y_sorted) != side:
+        return False
+    x_uniform = np.allclose(np.diff(x_sorted), np.diff(x_sorted)[0])
+    y_uniform = np.allclose(np.diff(y_sorted), np.diff(y_sorted)[0])
+    return x_uniform and y_uniform
+
+
 def _fill_field(ax, nodes, values, levels=50, **contourf_kwargs):
     """根据数据类型选择 contourf 或 tricontourf 绘制标量场。
 
@@ -20,8 +33,7 @@ def _fill_field(ax, nodes, values, levels=50, **contourf_kwargs):
     """
     n = len(values)
     side = int(np.sqrt(n))
-    if side * side == n:
-        # 规则网格：reshape 后用 contourf
+    if side * side == n and _is_structured_grid(nodes, side):
         x2d = nodes[:, 0].reshape(side, side)
         y2d = nodes[:, 1].reshape(side, side)
         v2d = values.reshape(side, side)

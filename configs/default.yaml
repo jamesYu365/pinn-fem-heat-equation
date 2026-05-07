@@ -18,7 +18,8 @@ case: 1
 pinn:
   mode: forward
   layers: [3, 8, 16, 16, 8, 1]
-  lr: 0.005
+  peak_lr: 0.005
+  end_lr: 1e-5
   epochs: 6000
   num_collocation: 4000
   num_ic: 1000
