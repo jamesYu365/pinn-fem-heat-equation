@@ -12,3 +12,16 @@ physics:
   alpha: 0.01
 
 case: 1
+
+pinn:
+  mode: forward
+  layers: [3, 64, 64, 64, 64, 1]
+  lr: 0.0001
+  epochs: 30000
+  num_collocation: 10000
+  num_ic: 1000
+  num_bc: 1000
+  lambda_r: 1.0
+  lambda_ic: 100.0
+  lambda_bc: 100.0
+  log_every: 3000

@@ -1,11 +1,14 @@
 import os
 import logging
 import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib
 
-matplotlib.rcParams["font.sans-serif"] = ["SimHei"]
+matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei"]
+matplotlib.rcParams["font.family"] = "sans-serif"
 matplotlib.rcParams["axes.unicode_minus"] = False
+
+import matplotlib.pyplot as plt
+
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 

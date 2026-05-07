@@ -14,10 +14,11 @@
 
 ## 环境配置
 
-本仓库使用 conda 虚拟环境 `agent`：
+本仓库使用 conda 虚拟环境 `agent`，运行 Python 脚本时需设置 UTF-8 编码避免终端乱码：
 
 ```bash
 conda activate agent
+export PYTHONIOENCODING=utf-8
 pip install -r requirements.txt
 ```
 

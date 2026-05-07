@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.fem.mesh import generate_structured_mesh
 from src.fem.assemble import assemble_global
-from src.fem.boundary import apply_dirichlet
 from src.fem.solver import solve_implicit_euler
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
@@ -59,12 +58,8 @@ def main():
     # 2. 组装全局矩阵
     K, M = assemble_global(nodes, elements, alpha)
     num_nodes = len(nodes)
-    F = np.zeros(num_nodes)
 
-    # 3. 施加边界条件
-    K, M, F = apply_dirichlet(K, M, F, boundary_nodes)
-
-    # 4. 初始条件
+    # 3. 初始条件
     U0 = np.sin(np.pi * nodes[:, 0]) * np.sin(np.pi * nodes[:, 1])
     U0[boundary_nodes] = 0.0
 
