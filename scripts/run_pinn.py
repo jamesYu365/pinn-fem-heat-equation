@@ -17,7 +17,10 @@ from src.pinn.sampling import sample_collocation, sample_initial, sample_boundar
 from src.pinn.train import train
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
-from src.utils.visualization import plot_temperature_field, plot_error_field
+from src.utils.visualization import plot_comparison_2x3, plot_loss_with_components
+
+# 监测点坐标
+MONITOR_LOCS = [(0.25, 0.25), (0.5, 0.5), (0.75, 0.75)]
 
 
 def main():
@@ -52,38 +55,38 @@ def main():
     os.makedirs(fig_dir, exist_ok=True)
     print(f"实验目录: {run_dir}")
 
-    # 1. 采样配点
+    # ---- 1. 训练集采样 ----
     n_col = pinn_cfg["num_collocation"]
     n_ic = pinn_cfg["num_ic"]
     n_bc = pinn_cfg["num_bc"]
 
-    x_r, y_r, t_r = sample_collocation(n_col, T_end, device)
-    x_ic, y_ic = sample_initial(n_ic, device)
-    x_bc, y_bc, t_bc = sample_boundary(n_bc, T_end, device)
+    train_x_r, train_y_r, train_t_r = sample_collocation(n_col, T_end, device)
+    train_x_ic, train_y_ic = sample_initial(n_ic, device)
+    train_x_bc, train_y_bc, train_t_bc = sample_boundary(n_bc, T_end, device)
 
-    print(f"配点: 域内 {n_col}, IC {n_ic}, BC {n_bc}")
+    collocation_points = torch.cat([train_x_r, train_y_r], dim=1).cpu().numpy()
+    print(f"训练配点: 域内 {n_col}, IC {n_ic}, BC {n_bc}")
 
-    # 2. 构建模型
-    model = PINN(layers=layers).to(device)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"网络参数量: {total_params}")
-    print(f"网络结构: {layers}")
+    # ---- 2. 验证集采样（随机配点） ----
+    n_val_col = pinn_cfg.get("num_val_collocation", 0)
+    n_val_ic = pinn_cfg.get("num_val_ic", 0)
+    n_val_bc = pinn_cfg.get("num_val_bc", 0)
+    val_data = None
+    if n_val_col > 0 or n_val_ic > 0 or n_val_bc > 0:
+        val_data = {
+            "x_r": torch.rand(n_val_col, 1, device=device),
+            "y_r": torch.rand(n_val_col, 1, device=device),
+            "t_r": torch.rand(n_val_col, 1, device=device) * T_end,
+            "x_ic": torch.rand(n_val_ic, 1, device=device),
+            "y_ic": torch.rand(n_val_ic, 1, device=device),
+        }
+        vx_bc, vy_bc, vt_bc = sample_boundary(n_val_bc, T_end, device)
+        val_data["x_bc"] = vx_bc
+        val_data["y_bc"] = vy_bc
+        val_data["t_bc"] = vt_bc
+        print(f"验证配点: 域内 {n_val_col}, IC {n_val_ic}, BC {n_val_bc}")
 
-    # 3. 训练
-    loss_weights = {
-        "lambda_r": pinn_cfg["lambda_r"],
-        "lambda_ic": pinn_cfg["lambda_ic"],
-        "lambda_bc": pinn_cfg["lambda_bc"],
-    }
-    alpha_t = torch.tensor(alpha, device=device)
-
-    loss_history, components_history = train(
-        model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
-        alpha_t, pinn_cfg["epochs"], pinn_cfg["lr"],
-        loss_weights, log_every=pinn_cfg["log_every"], device=device
-    )
-
-    # 4. 在规则网格上推理
+    # ---- 3. 测试网格 ----
     nx_eval = 50
     x_lin = np.linspace(0, 1, nx_eval)
     y_lin = np.linspace(0, 1, nx_eval)
@@ -92,27 +95,97 @@ def main():
     y_flat = yy.flatten()
     nodes = np.column_stack([x_flat, y_flat])
 
-    # 在多个时间点评估
+    # 测试评估时间点
     eval_times = [0.0, T_end / 4, T_end / 2, T_end]
+
+    # 网格评估 tensor（复用）
+    x_t_grid = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to(device)
+    y_t_grid = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to(device)
+
+    # 周期性网格验证回调
+    grid_l2_log = []
+
+    def on_eval(model, epoch):
+        model.eval()
+        with torch.no_grad():
+            t_t = torch.full_like(x_t_grid, T_end)
+            u_pred = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
+        u_exact = case1_exact(x_flat, y_flat, T_end, alpha)
+        l2 = relative_l2_error(u_pred, u_exact)
+        grid_l2_log.append({"epoch": epoch, "l2": l2})
+        print(f"  >>> 网格验证 t={T_end}: L2={l2:.6e}")
+        model.train()
+
+    # ---- 4. 构建模型 ----
+    model = PINN(layers=layers).to(device)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"网络参数量: {total_params}")
+    print(f"网络结构: {layers}")
+
+    # ---- 5. 训练 ----
+    loss_weights = {
+        "lambda_r": pinn_cfg["lambda_r"],
+        "lambda_ic": pinn_cfg["lambda_ic"],
+        "lambda_bc": pinn_cfg["lambda_bc"],
+    }
+    alpha_t = torch.tensor(alpha, device=device)
+
+    loss_history, components_history, val_history = train(
+        model,
+        train_x_r, train_y_r, train_t_r,
+        train_x_ic, train_y_ic,
+        train_x_bc, train_y_bc, train_t_bc,
+        alpha_t, pinn_cfg["epochs"], pinn_cfg["lr"],
+        loss_weights, log_every=pinn_cfg["log_every"], device=device,
+        clip_grad_norm=pinn_cfg.get("clip_grad_norm", None),
+        val_data=val_data,
+        eval_callback=on_eval,
+    )
+
+    # ---- 6. 测试集评估 ----
     l2_errors = []
     max_errors = []
 
     model.eval()
     with torch.no_grad():
-        x_t = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to(device)
-        y_t = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to(device)
         for t_val in eval_times:
-            t_t = torch.full_like(x_t, t_val)
-            u_pred = model(x_t, y_t, t_t).cpu().numpy().flatten()
+            t_t = torch.full_like(x_t_grid, t_val)
+            u_pred = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
 
             u_exact = case1_exact(x_flat, y_flat, t_val, alpha)
             l2_err = relative_l2_error(u_pred, u_exact)
             max_err = max_absolute_error(u_pred, u_exact)
             l2_errors.append(l2_err)
             max_errors.append(max_err)
-            print(f"  t={t_val:.3f}: L2={l2_err:.6e}, Max={max_err:.6e}")
+            print(f"  测试 t={t_val:.3f}: L2={l2_err:.6e}, Max={max_err:.6e}")
 
-    # 5. 保存结果
+    # ---- 7. 计算 2×3 图所需数据 ----
+    with torch.no_grad():
+        # Row 2 - 时间曲线：3 个监测点在多个时刻的值
+        ts_times = np.linspace(0, T_end, 100)
+        ts_u_pred = []
+        ts_u_exact = []
+        for (x0, y0) in MONITOR_LOCS:
+            x_pt = torch.full((len(ts_times), 1), x0, dtype=torch.float32, device=device)
+            y_pt = torch.full((len(ts_times), 1), y0, dtype=torch.float32, device=device)
+            t_pt = torch.tensor(ts_times, dtype=torch.float32, device=device).unsqueeze(1)
+            u_p = model(x_pt, y_pt, t_pt).cpu().numpy().flatten()
+            u_e = case1_exact(np.full_like(ts_times, x0),
+                              np.full_like(ts_times, y0),
+                              ts_times, alpha)
+            ts_u_pred.append(u_p)
+            ts_u_exact.append(u_e)
+
+        # Row 2 - x=0.5 切面
+        n_cs = 100
+        cs_y = np.linspace(0, 1, n_cs)
+        cs_x = torch.full((n_cs, 1), 0.5, dtype=torch.float32, device=device)
+        cs_y_t = torch.tensor(cs_y, dtype=torch.float32, device=device).unsqueeze(1)
+        cs_t = torch.full((n_cs, 1), T_end, device=device)
+        cs_u_pred = model(cs_x, cs_y_t, cs_t).cpu().numpy().flatten()
+        cs_u_exact = case1_exact(np.full(n_cs, 0.5), cs_y, T_end, alpha)
+
+    # ---- 8. 保存结果 ----
     summary = {
         "case": case,
         "method": "PINN",
@@ -123,44 +196,40 @@ def main():
         "epochs": pinn_cfg["epochs"],
         "lr": pinn_cfg["lr"],
         "num_collocation": n_col,
+        "num_val_collocation": n_val_col,
         "device": str(device),
         "eval_times": eval_times,
         "l2_errors": [float(e) for e in l2_errors],
         "max_errors": [float(e) for e in max_errors],
         "final_loss": float(loss_history[-1]),
+        "final_val_loss": float(val_history[-1]) if val_history else None,
+        "grid_l2_log": grid_l2_log,
     }
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
 
     shutil.copy2(args.config, os.path.join(run_dir, "config_snapshot.yaml"))
 
-    # 6. 可视化
-    # 最终时刻温度场
+    # ---- 9. 可视化 ----
+    # 2×3 对比图
     with torch.no_grad():
-        x_t = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to(device)
-        y_t = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to(device)
-        t_t = torch.full_like(x_t, T_end)
-        u_final = model(x_t, y_t, t_t).cpu().numpy().flatten()
-
+        t_t = torch.full_like(x_t_grid, T_end)
+        u_final = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
     u_exact_final = case1_exact(x_flat, y_flat, T_end, alpha)
 
-    plot_temperature_field(nodes, u_final, f"PINN 解 (t={T_end})", os.path.join(fig_dir, "pinn_temperature.png"))
-    plot_temperature_field(nodes, u_exact_final, f"解析解 (t={T_end})", os.path.join(fig_dir, "exact_temperature.png"))
-    plot_error_field(nodes, u_final, u_exact_final, f"误差分布 (t={T_end})", os.path.join(fig_dir, "error_field.png"))
+    plot_comparison_2x3(
+        nodes, u_final, u_exact_final, T_end,
+        os.path.join(fig_dir, "comparison.png"),
+        method="PINN", collocation_points=collocation_points,
+        ts_data={"times": ts_times, "locations": MONITOR_LOCS,
+                 "u_pred": ts_u_pred, "u_exact": ts_u_exact},
+        cs_data={"y": cs_y, "u_pred": cs_u_pred, "u_exact": cs_u_exact},
+    )
 
     # 损失曲线
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.semilogy(loss_history, label="总损失")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title("PINN 训练损失曲线")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    fig.savefig(os.path.join(fig_dir, "loss_curve.png"), dpi=150)
-    plt.close(fig)
+    plot_loss_with_components(loss_history, components_history,
+                             os.path.join(fig_dir, "loss_curve.png"),
+                             val_history=val_history if val_history else None)
 
     print(f"\n结果摘要: {run_dir}/summary.json")
     print(f"可视化图像: {fig_dir}/")

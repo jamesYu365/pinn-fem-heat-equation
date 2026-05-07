@@ -16,7 +16,7 @@ from src.fem.assemble import assemble_global
 from src.fem.solver import solve_implicit_euler
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
-from src.utils.visualization import plot_temperature_field, plot_error_field, plot_error_over_time
+from src.utils.visualization import plot_comparison_2x3, plot_error_over_time
 
 
 def main():
@@ -103,9 +103,32 @@ def main():
     U_final = U_history[-1]
     u_exact_final = case1_exact(nodes[:, 0], nodes[:, 1], T_end, alpha)
 
-    plot_temperature_field(nodes, U_final, f"FEM 解 (t={T_end})", os.path.join(fig_dir, "fem_temperature.png"))
-    plot_temperature_field(nodes, u_exact_final, f"解析解 (t={T_end})", os.path.join(fig_dir, "exact_temperature.png"))
-    plot_error_field(nodes, U_final, u_exact_final, f"误差分布 (t={T_end})", os.path.join(fig_dir, "error_field.png"))
+    # 时间曲线：3 个监测点
+    monitor_locs = [(0.25, 0.25), (0.5, 0.5), (0.75, 0.75)]
+    ts_u_pred = []
+    ts_u_exact = []
+    for (x0, y0) in monitor_locs:
+        dists = np.sqrt((nodes[:, 0] - x0)**2 + (nodes[:, 1] - y0)**2)
+        nearest = np.argmin(dists)
+        u_ts = [U[nearest] for U in U_history]
+        u_e_ts = [case1_exact(nodes[nearest, 0], nodes[nearest, 1], t, alpha) for t in times]
+        ts_u_pred.append(u_ts)
+        ts_u_exact.append(u_e_ts)
+
+    # x=0.5 切面
+    x_half_idx = nx // 2
+    cs_node_ids = [x_half_idx + j * (nx + 1) for j in range(ny + 1)]
+    cs_y = nodes[cs_node_ids, 1]
+    cs_u_pred = U_final[cs_node_ids]
+    cs_u_exact = u_exact_final[cs_node_ids]
+
+    plot_comparison_2x3(
+        nodes, U_final, u_exact_final, T_end,
+        os.path.join(fig_dir, "comparison.png"), method="FEM",
+        ts_data={"times": times, "locations": monitor_locs,
+                 "u_pred": ts_u_pred, "u_exact": ts_u_exact},
+        cs_data={"y": cs_y, "u_pred": cs_u_pred, "u_exact": cs_u_exact},
+    )
     plot_error_over_time(times, l2_errors, max_errors, os.path.join(fig_dir, "error_over_time.png"))
 
     print(f"可视化图像: {fig_dir}/")

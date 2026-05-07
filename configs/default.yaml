@@ -15,13 +15,17 @@ case: 1
 
 pinn:
   mode: forward
-  layers: [3, 64, 64, 64, 64, 1]
-  lr: 0.0001
-  epochs: 30000
-  num_collocation: 10000
+  layers: [3, 8, 16, 16, 8, 1]
+  lr: 0.005
+  epochs: 3000
+  num_collocation: 4000
   num_ic: 1000
   num_bc: 1000
   lambda_r: 1.0
   lambda_ic: 100.0
   lambda_bc: 100.0
-  log_every: 3000
+  log_every: 300
+  # clip_grad_norm: 2.0
+  num_val_collocation: 2000
+  num_val_ic: 500
+  num_val_bc: 500
