@@ -13,16 +13,16 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
 def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PINN",
-                        collocation_points=None, ts_data=None, cs_data=None):
+                        ts_data=None, cs_data=None, T_train=None):
     """绘制 2×3 对比图。
 
     Row 1: 解析解 | 数值解 | 误差分布
     Row 2 (可选): 时间曲线 | x=0.5 切面 | 误差切面
 
     参数:
-        collocation_points: (N,2) 域内配点坐标，叠加在数值解子图上
         ts_data: dict, keys: 'times', 'locations', 'u_pred', 'u_exact'
         cs_data: dict, keys: 'y', 'u_pred', 'u_exact'
+        T_train: 训练时间上限，在时间曲线图中画竖线区分训练/外推域
     """
     has_row2 = ts_data is not None and cs_data is not None
     nrows = 2 if has_row2 else 1
@@ -30,24 +30,26 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
     if nrows == 1:
         axes = axes.reshape(1, -1)
 
+    # 统一 colorbar 范围
+    u_min = min(u_exact.min(), u_pred.min())
+    u_max = max(u_exact.max(), u_pred.max())
+
     # Row 1: 空间场
-    sc0 = axes[0, 0].tricontourf(nodes[:, 0], nodes[:, 1], u_exact, levels=50, cmap="hot")
+    sc0 = axes[0, 0].tricontourf(nodes[:, 0], nodes[:, 1], u_exact, levels=50,
+                                  cmap="hot", vmin=u_min, vmax=u_max)
     axes[0, 0].set_title(f"解析解 (t={t_val})")
     axes[0, 0].set_xlabel("x")
     axes[0, 0].set_ylabel("y")
     axes[0, 0].set_aspect("equal")
     fig.colorbar(sc0, ax=axes[0, 0], label="u")
 
-    sc1 = axes[0, 1].tricontourf(nodes[:, 0], nodes[:, 1], u_pred, levels=50, cmap="hot")
+    sc1 = axes[0, 1].tricontourf(nodes[:, 0], nodes[:, 1], u_pred, levels=50,
+                                  cmap="hot", vmin=u_min, vmax=u_max)
     axes[0, 1].set_title(f"{method} 解 (t={t_val})")
     axes[0, 1].set_xlabel("x")
     axes[0, 1].set_ylabel("y")
     axes[0, 1].set_aspect("equal")
     fig.colorbar(sc1, ax=axes[0, 1], label="u")
-
-    if collocation_points is not None:
-        axes[0, 1].scatter(collocation_points[:, 0], collocation_points[:, 1],
-                           s=2, c="cyan", alpha=0.4)
 
     error = np.abs(u_pred - u_exact)
     sc2 = axes[0, 2].tricontourf(nodes[:, 0], nodes[:, 1], error, levels=50, cmap="viridis")
@@ -69,6 +71,18 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
                             label=f"解析 {tag}")
             axes[1, 0].plot(times, u_p, color=colors[i], linestyle="--", alpha=0.8,
                             label=f"{method} {tag}")
+            # 标记监测点位置
+            axes[0, 0].plot(loc[0], loc[1], "x", color=colors[i], markersize=8,
+                            markeredgewidth=2)
+        # 训练/外推分界线
+        if T_train is not None:
+            axes[1, 0].axvline(T_train, color="gray", linestyle=":", linewidth=1.5,
+                                label=f"T_train={T_train:.2f}")
+            ylim = axes[1, 0].get_ylim()
+            ymid = (ylim[0] + ylim[1]) / 2
+            axes[1, 0].text(T_train, ymid, " 训练|外推 ", fontsize=7,
+                            color="gray", va="center", ha="center",
+                            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
         axes[1, 0].set_xlabel("t")
         axes[1, 0].set_ylabel("u")
         axes[1, 0].set_title("时间维度变化")

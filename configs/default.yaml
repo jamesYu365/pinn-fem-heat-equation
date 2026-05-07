@@ -17,7 +17,7 @@ pinn:
   mode: forward
   layers: [3, 8, 16, 16, 8, 1]
   lr: 0.005
-  epochs: 3000
+  epochs: 6000
   num_collocation: 4000
   num_ic: 1000
   num_bc: 1000
@@ -29,3 +29,5 @@ pinn:
   num_val_collocation: 2000
   num_val_ic: 500
   num_val_bc: 500
+  val_time_ratio: 0.6
+  early_stop_patience: 1000

@@ -38,10 +38,17 @@ def main():
     case = config["case"]
     pinn_cfg = config["pinn"]
 
+    # 时间泛化：训练只在 [0, T_train]，外推 (T_train, T_end]
+    val_time_ratio = pinn_cfg.get("val_time_ratio", 1.0)
+    T_train = val_time_ratio * T_end
+    time_generalization = val_time_ratio < 1.0
+
     # 设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"=== PINN 求解器 (Case {case}, 正问题) ===")
     print(f"设备: {device}")
+    if time_generalization:
+        print(f"时间泛化: 训练 t∈[0, {T_train:.3f}], 外推 t∈({T_train:.3f}, {T_end:.3f}]")
 
     # 实验目录
     layers = pinn_cfg["layers"]
@@ -55,19 +62,18 @@ def main():
     os.makedirs(fig_dir, exist_ok=True)
     print(f"实验目录: {run_dir}")
 
-    # ---- 1. 训练集采样 ----
+    # ---- 1. 训练集采样（t ∈ [0, T_train]） ----
     n_col = pinn_cfg["num_collocation"]
     n_ic = pinn_cfg["num_ic"]
     n_bc = pinn_cfg["num_bc"]
 
-    train_x_r, train_y_r, train_t_r = sample_collocation(n_col, T_end, device)
+    train_x_r, train_y_r, train_t_r = sample_collocation(n_col, T_train, device)
     train_x_ic, train_y_ic = sample_initial(n_ic, device)
-    train_x_bc, train_y_bc, train_t_bc = sample_boundary(n_bc, T_end, device)
+    train_x_bc, train_y_bc, train_t_bc = sample_boundary(n_bc, T_train, device)
 
-    collocation_points = torch.cat([train_x_r, train_y_r], dim=1).cpu().numpy()
-    print(f"训练配点: 域内 {n_col}, IC {n_ic}, BC {n_bc}")
+    print(f"训练配点: 域内 {n_col}, IC {n_ic}, BC {n_bc}, T_train={T_train:.3f}")
 
-    # ---- 2. 验证集采样（随机配点） ----
+    # ---- 2. 验证集采样（随机配点，与训练同域 t ∈ [0, T_train]） ----
     n_val_col = pinn_cfg.get("num_val_collocation", 0)
     n_val_ic = pinn_cfg.get("num_val_ic", 0)
     n_val_bc = pinn_cfg.get("num_val_bc", 0)
@@ -76,11 +82,11 @@ def main():
         val_data = {
             "x_r": torch.rand(n_val_col, 1, device=device),
             "y_r": torch.rand(n_val_col, 1, device=device),
-            "t_r": torch.rand(n_val_col, 1, device=device) * T_end,
+            "t_r": torch.rand(n_val_col, 1, device=device) * T_train,
             "x_ic": torch.rand(n_val_ic, 1, device=device),
             "y_ic": torch.rand(n_val_ic, 1, device=device),
         }
-        vx_bc, vy_bc, vt_bc = sample_boundary(n_val_bc, T_end, device)
+        vx_bc, vy_bc, vt_bc = sample_boundary(n_val_bc, T_train, device)
         val_data["x_bc"] = vx_bc
         val_data["y_bc"] = vy_bc
         val_data["t_bc"] = vt_bc
@@ -95,25 +101,40 @@ def main():
     y_flat = yy.flatten()
     nodes = np.column_stack([x_flat, y_flat])
 
-    # 测试评估时间点
-    eval_times = [0.0, T_end / 4, T_end / 2, T_end]
+    # 测试评估时间点：区分训练域和外推域
+    if time_generalization:
+        eval_times = [0.0, T_train / 2, T_train, (T_train + T_end) / 2, T_end]
+    else:
+        eval_times = [0.0, T_end / 4, T_end / 2, T_end]
 
     # 网格评估 tensor（复用）
     x_t_grid = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to(device)
     y_t_grid = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to(device)
 
-    # 周期性网格验证回调
+    # 周期性网格验证回调：同时评估训练域和外推域
     grid_l2_log = []
 
     def on_eval(model, epoch):
         model.eval()
         with torch.no_grad():
-            t_t = torch.full_like(x_t_grid, T_end)
+            # 训练域末端
+            t_t = torch.full_like(x_t_grid, T_train)
             u_pred = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
-        u_exact = case1_exact(x_flat, y_flat, T_end, alpha)
-        l2 = relative_l2_error(u_pred, u_exact)
-        grid_l2_log.append({"epoch": epoch, "l2": l2})
-        print(f"  >>> 网格验证 t={T_end}: L2={l2:.6e}")
+        u_exact = case1_exact(x_flat, y_flat, T_train, alpha)
+        l2_train = relative_l2_error(u_pred, u_exact)
+
+        if time_generalization:
+            with torch.no_grad():
+                t_t = torch.full_like(x_t_grid, T_end)
+                u_pred = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
+            u_exact = case1_exact(x_flat, y_flat, T_end, alpha)
+            l2_extrap = relative_l2_error(u_pred, u_exact)
+            grid_l2_log.append({"epoch": epoch, "l2_train": l2_train, "l2_extrap": l2_extrap})
+            print(f"  >>> 网格验证 t={T_train:.3f}[训练]: L2={l2_train:.6e} | "
+                  f"t={T_end:.3f}[外推]: L2={l2_extrap:.6e}")
+        else:
+            grid_l2_log.append({"epoch": epoch, "l2_train": l2_train})
+            print(f"  >>> 网格验证 t={T_end:.3f}: L2={l2_train:.6e}")
         model.train()
 
     # ---- 4. 构建模型 ----
@@ -130,7 +151,7 @@ def main():
     }
     alpha_t = torch.tensor(alpha, device=device)
 
-    loss_history, components_history, val_history = train(
+    loss_history, components_history, val_history, best_state, best_epoch = train(
         model,
         train_x_r, train_y_r, train_t_r,
         train_x_ic, train_y_ic,
@@ -140,7 +161,14 @@ def main():
         clip_grad_norm=pinn_cfg.get("clip_grad_norm", None),
         val_data=val_data,
         eval_callback=on_eval,
+        early_stop_patience=pinn_cfg.get("early_stop_patience", None),
     )
+
+    # 加载最优模型
+    model.load_state_dict(best_state)
+    best_val = min(val_history) if val_history else None
+    torch.save(best_state, os.path.join(run_dir, "best_model.pt"))
+    print(f"最优模型: epoch={best_epoch}, val loss={best_val:.6e}" if best_val else "最优模型已保存")
 
     # ---- 6. 测试集评估 ----
     l2_errors = []
@@ -157,7 +185,8 @@ def main():
             max_err = max_absolute_error(u_pred, u_exact)
             l2_errors.append(l2_err)
             max_errors.append(max_err)
-            print(f"  测试 t={t_val:.3f}: L2={l2_err:.6e}, Max={max_err:.6e}")
+            tag = "[外推]" if time_generalization and t_val > T_train else "[训练]"
+            print(f"  测试 t={t_val:.3f} {tag}: L2={l2_err:.6e}, Max={max_err:.6e}")
 
     # ---- 7. 计算 2×3 图所需数据 ----
     with torch.no_grad():
@@ -197,12 +226,16 @@ def main():
         "lr": pinn_cfg["lr"],
         "num_collocation": n_col,
         "num_val_collocation": n_val_col,
+        "T_train": T_train,
+        "val_time_ratio": val_time_ratio,
         "device": str(device),
         "eval_times": eval_times,
         "l2_errors": [float(e) for e in l2_errors],
         "max_errors": [float(e) for e in max_errors],
         "final_loss": float(loss_history[-1]),
         "final_val_loss": float(val_history[-1]) if val_history else None,
+        "best_epoch": best_epoch,
+        "best_val_loss": float(min(val_history)) if val_history else None,
         "grid_l2_log": grid_l2_log,
     }
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
@@ -211,7 +244,7 @@ def main():
     shutil.copy2(args.config, os.path.join(run_dir, "config_snapshot.yaml"))
 
     # ---- 9. 可视化 ----
-    # 2×3 对比图
+    # 2×3 对比图（评估时刻取 T_end）
     with torch.no_grad():
         t_t = torch.full_like(x_t_grid, T_end)
         u_final = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
@@ -220,10 +253,11 @@ def main():
     plot_comparison_2x3(
         nodes, u_final, u_exact_final, T_end,
         os.path.join(fig_dir, "comparison.png"),
-        method="PINN", collocation_points=collocation_points,
+        method="PINN",
         ts_data={"times": ts_times, "locations": MONITOR_LOCS,
                  "u_pred": ts_u_pred, "u_exact": ts_u_exact},
         cs_data={"y": cs_y, "u_pred": cs_u_pred, "u_exact": cs_u_exact},
+        T_train=T_train if time_generalization else None,
     )
 
     # 损失曲线
