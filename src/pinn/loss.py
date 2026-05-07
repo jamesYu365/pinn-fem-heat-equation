@@ -45,12 +45,25 @@ def bc_loss(model, x, y, t):
     return torch.mean(u_pred ** 2)
 
 
-def total_loss(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha,
-               lambda_r=1.0, lambda_ic=100.0, lambda_bc=100.0):
-    """计算总损失。"""
-    loss_r = pde_loss(model, x_r, y_r, t_r, alpha)
-    loss_ic = ic_loss(model, x_ic, y_ic)
-    loss_bc = bc_loss(model, x_bc, y_bc, t_bc)
+def component_losses(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha):
+    """返回可反传的 PDE/IC/BC 原始损失张量。"""
+    return {
+        "pde": pde_loss(model, x_r, y_r, t_r, alpha),
+        "ic": ic_loss(model, x_ic, y_ic),
+        "bc": bc_loss(model, x_bc, y_bc, t_bc),
+    }
 
-    loss = lambda_r * loss_r + lambda_ic * loss_ic + lambda_bc * loss_bc
-    return loss, {"pde": loss_r.item(), "ic": loss_ic.item(), "bc": loss_bc.item()}
+
+def total_loss(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha,
+               lambda_r=1.0, lambda_ic=100.0, lambda_bc=100.0,
+               effective_weights=None):
+    """计算总损失。"""
+    losses = component_losses(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha)
+    weights = effective_weights or {
+        "pde": lambda_r,
+        "ic": lambda_ic,
+        "bc": lambda_bc,
+    }
+
+    loss = weights["pde"] * losses["pde"] + weights["ic"] * losses["ic"] + weights["bc"] * losses["bc"]
+    return loss, {name: value.item() for name, value in losses.items()}

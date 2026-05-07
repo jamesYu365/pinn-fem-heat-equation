@@ -12,6 +12,25 @@ import matplotlib.pyplot as plt
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
+def _fill_field(ax, nodes, values, levels=50, **contourf_kwargs):
+    """根据数据类型选择 contourf 或 tricontourf 绘制标量场。
+
+    当节点构成规则网格时使用 contourf（避免 Delaunay 三角化伪影），
+    否则回退到 tricontourf。
+    """
+    n = len(values)
+    side = int(np.sqrt(n))
+    if side * side == n:
+        # 规则网格：reshape 后用 contourf
+        x2d = nodes[:, 0].reshape(side, side)
+        y2d = nodes[:, 1].reshape(side, side)
+        v2d = values.reshape(side, side)
+        return ax.contourf(x2d, y2d, v2d, levels=levels, **contourf_kwargs)
+    else:
+        return ax.tricontourf(nodes[:, 0], nodes[:, 1], values, levels=levels,
+                              **contourf_kwargs)
+
+
 def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PINN",
                         ts_data=None, cs_data=None, T_train=None):
     """绘制 2×3 对比图。
@@ -20,6 +39,7 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
     Row 2 (可选): 时间曲线 | x=0.5 切面 | 误差切面
 
     参数:
+        nodes: (N, 2) 节点坐标，支持规则网格和非结构网格
         ts_data: dict, keys: 'times', 'locations', 'u_pred', 'u_exact'
         cs_data: dict, keys: 'y', 'u_pred', 'u_exact'
         T_train: 训练时间上限，在时间曲线图中画竖线区分训练/外推域
@@ -35,16 +55,16 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
     u_max = max(u_exact.max(), u_pred.max())
 
     # Row 1: 空间场
-    sc0 = axes[0, 0].tricontourf(nodes[:, 0], nodes[:, 1], u_exact, levels=50,
-                                  cmap="hot", vmin=u_min, vmax=u_max)
+    sc0 = _fill_field(axes[0, 0], nodes, u_exact, levels=50,
+                      cmap="hot", vmin=u_min, vmax=u_max)
     axes[0, 0].set_title(f"解析解 (t={t_val})")
     axes[0, 0].set_xlabel("x")
     axes[0, 0].set_ylabel("y")
     axes[0, 0].set_aspect("equal")
     fig.colorbar(sc0, ax=axes[0, 0], label="u")
 
-    sc1 = axes[0, 1].tricontourf(nodes[:, 0], nodes[:, 1], u_pred, levels=50,
-                                  cmap="hot", vmin=u_min, vmax=u_max)
+    sc1 = _fill_field(axes[0, 1], nodes, u_pred, levels=50,
+                      cmap="hot", vmin=u_min, vmax=u_max)
     axes[0, 1].set_title(f"{method} 解 (t={t_val})")
     axes[0, 1].set_xlabel("x")
     axes[0, 1].set_ylabel("y")
@@ -52,7 +72,7 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
     fig.colorbar(sc1, ax=axes[0, 1], label="u")
 
     error = np.abs(u_pred - u_exact)
-    sc2 = axes[0, 2].tricontourf(nodes[:, 0], nodes[:, 1], error, levels=50, cmap="viridis")
+    sc2 = _fill_field(axes[0, 2], nodes, error, levels=50, cmap="viridis")
     axes[0, 2].set_title(f"误差分布 (t={t_val})")
     axes[0, 2].set_xlabel("x")
     axes[0, 2].set_ylabel("y")

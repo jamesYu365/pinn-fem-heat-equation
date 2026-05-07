@@ -11,6 +11,8 @@ fem:
 physics:
   alpha: 0.01
 
+seed: 42
+
 case: 1
 
 pinn:
@@ -24,6 +26,12 @@ pinn:
   lambda_r: 1.0
   lambda_ic: 100.0
   lambda_bc: 100.0
+  adaptive_loss:
+    enabled: true
+    beta: 0.98
+    min_scale: 0.2
+    max_scale: 5.0
+  warmup_epochs: 300
   log_every: 300
   # clip_grad_norm: 2.0
   num_val_collocation: 2000

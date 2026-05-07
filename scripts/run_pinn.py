@@ -18,9 +18,10 @@ from src.pinn.train import train
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
 from src.utils.visualization import plot_comparison_2x3, plot_loss_with_components
+from src.utils.seed import set_seed
 
 # 监测点坐标
-MONITOR_LOCS = [(0.25, 0.25), (0.5, 0.5), (0.75, 0.75)]
+MONITOR_LOCS = [(0.25, 0.25), (0.25, 0.50), (0.50, 0.50)]
 
 
 def main():
@@ -37,6 +38,8 @@ def main():
     alpha = config["physics"]["alpha"]
     case = config["case"]
     pinn_cfg = config["pinn"]
+
+    set_seed(config.get("seed", 42))
 
     # 时间泛化：训练只在 [0, T_train]，外推 (T_train, T_end]
     val_time_ratio = pinn_cfg.get("val_time_ratio", 1.0)
@@ -162,6 +165,8 @@ def main():
         val_data=val_data,
         eval_callback=on_eval,
         early_stop_patience=pinn_cfg.get("early_stop_patience", None),
+        adaptive_loss=pinn_cfg.get("adaptive_loss", None),
+        warmup_epochs=pinn_cfg.get("warmup_epochs", 0),
     )
 
     # 加载最优模型
@@ -224,6 +229,9 @@ def main():
         "total_params": total_params,
         "epochs": pinn_cfg["epochs"],
         "lr": pinn_cfg["lr"],
+        "warmup_epochs": pinn_cfg.get("warmup_epochs", 0),
+        "clip_grad_norm": pinn_cfg.get("clip_grad_norm", None),
+        "adaptive_loss": pinn_cfg.get("adaptive_loss", None),
         "num_collocation": n_col,
         "num_val_collocation": n_val_col,
         "T_train": T_train,

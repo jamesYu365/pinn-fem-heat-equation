@@ -1,12 +1,74 @@
 import torch
 import copy
-from .loss import total_loss
+from .loss import component_losses
+
+
+class AdaptiveLossBalancer:
+    """用 EMA 平衡 PDE/IC/BC 的加权贡献，抑制单个约束项突然主导更新。"""
+
+    def __init__(self, base_weights, enabled=False, beta=0.98, min_scale=0.2,
+                 max_scale=5.0, eps=1e-12):
+        self.base_weights = {
+            "pde": float(base_weights["lambda_r"]),
+            "ic": float(base_weights["lambda_ic"]),
+            "bc": float(base_weights["lambda_bc"]),
+        }
+        self.enabled = bool(enabled)
+        self.beta = float(beta)
+        self.min_scale = float(min_scale)
+        self.max_scale = float(max_scale)
+        self.eps = float(eps)
+        self.ema_losses = None
+        self.current_weights = dict(self.base_weights)
+
+    def weights(self, losses):
+        if not self.enabled:
+            self.current_weights = dict(self.base_weights)
+            return self.current_weights
+
+        detached = {name: losses[name].detach().clamp_min(self.eps) for name in self.base_weights}
+        if self.ema_losses is None:
+            self.ema_losses = detached
+        else:
+            self.ema_losses = {
+                name: self.beta * self.ema_losses[name] + (1.0 - self.beta) * detached[name]
+                for name in self.base_weights
+            }
+
+        contributions = {
+            name: self.base_weights[name] * self.ema_losses[name]
+            for name in self.base_weights
+        }
+        target = sum(contributions.values()) / len(contributions)
+
+        weights = {}
+        for name, base_weight in self.base_weights.items():
+            scale = (target / contributions[name]).clamp(self.min_scale, self.max_scale)
+            weights[name] = float(base_weight * scale.item())
+
+        self.current_weights = weights
+        return weights
+
+
+def _weighted_total(losses, weights):
+    return weights["pde"] * losses["pde"] + weights["ic"] * losses["ic"] + weights["bc"] * losses["bc"]
+
+
+def _serialize_components(losses, weights):
+    return {
+        "pde": losses["pde"].item(),
+        "ic": losses["ic"].item(),
+        "bc": losses["bc"].item(),
+        "w_pde": float(weights["pde"]),
+        "w_ic": float(weights["ic"]),
+        "w_bc": float(weights["bc"]),
+    }
 
 
 def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
           alpha, epochs, lr, loss_weights, log_every=1000, device="cpu",
           clip_grad_norm=None, val_data=None, eval_callback=None,
-          early_stop_patience=None):
+          early_stop_patience=None, adaptive_loss=None, warmup_epochs=0):
     """PINN 训练循环。
 
     参数:
@@ -14,6 +76,8 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
         eval_callback: 回调函数 fn(model, epoch)，每 log_every 步调用。
         early_stop_patience: 验证损失连续不下降的 epoch 数，超过则停止。
                              为 None 时不启用 early stop。
+        adaptive_loss: 自适应损失权重配置；None 时使用固定 lambda。
+        warmup_epochs: 学习率从 0 线性升到 lr 的 epoch 数。
 
     返回:
         loss_history: 每步训练总损失列表
@@ -22,6 +86,9 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
         best_state: 验证损失最低时的模型 state_dict
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    adaptive_loss = adaptive_loss or {}
+    balancer = AdaptiveLossBalancer(loss_weights, **adaptive_loss)
+    warmup_epochs = int(warmup_epochs or 0)
 
     loss_history = []
     components_history = []
@@ -34,29 +101,37 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
 
     model.train()
     for epoch in range(1, epochs + 1):
+        if warmup_epochs > 0:
+            lr_scale = min(1.0, epoch / float(warmup_epochs))
+            for group in optimizer.param_groups:
+                group["lr"] = lr * lr_scale
+
         optimizer.zero_grad()
-        loss, components = total_loss(
+        losses = component_losses(
             model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha,
-            **loss_weights
         )
+        effective_weights = balancer.weights(losses)
+        loss = _weighted_total(losses, effective_weights)
         loss.backward()
         if clip_grad_norm is not None and clip_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
         optimizer.step()
 
         loss_history.append(loss.item())
+        components = _serialize_components(losses, effective_weights)
         components_history.append(components)
 
         # 随机配点验证（每 epoch）
         if val_data is not None:
             with torch.enable_grad():
-                val_loss, _ = total_loss(
+                val_losses = component_losses(
                     model,
                     val_data["x_r"], val_data["y_r"], val_data["t_r"],
                     val_data["x_ic"], val_data["y_ic"],
                     val_data["x_bc"], val_data["y_bc"], val_data["t_bc"],
-                    alpha, **loss_weights
+                    alpha,
                 )
+                val_loss = _weighted_total(val_losses, effective_weights)
                 val_history.append(val_loss.item())
 
             # 追踪最优模型
@@ -80,7 +155,9 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
             msg = (f"  Epoch {epoch:6d} | Loss: {loss.item():.6e} "
                    f"| PDE: {components['pde']:.6e} "
                    f"| IC: {components['ic']:.6e} "
-                   f"| BC: {components['bc']:.6e}")
+                   f"| BC: {components['bc']:.6e} "
+                   f"| w=({components['w_pde']:.2g},"
+                   f"{components['w_ic']:.2g},{components['w_bc']:.2g})")
             if val_data is not None:
                 msg += f" | Val: {val_history[-1]:.6e} (best={best_val_loss:.6e})"
             print(msg)

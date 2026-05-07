@@ -10,7 +10,7 @@
 
 ## 项目概述
 
-二维非稳态热传导方程求解器，对比 Galerkin 有限元方法（FEM）与物理信息神经网络（PINN）。FEM 使用 NumPy/SciPy，PINN 使用 PyTorch。项目当前处于开发初期。
+二维非稳态热传导方程求解器，对比 Galerkin 有限元方法（FEM）与物理信息神经网络（PINN）。FEM 使用 NumPy/SciPy，PINN 使用 PyTorch。Case 1（无源项齐次 Dirichlet）FEM 和 PINN 正问题已完整实现，包含训练/验证/测试流水线、时间泛化验证和 Early Stop。
 
 ## 环境配置
 
@@ -25,18 +25,17 @@ pip install -r requirements.txt
 ## 架构规划
 
 - `src/fem/` — Galerkin FEM 流水线：网格生成、质量/刚度矩阵组装、边界条件、隐式 Euler 时间推进
-- `src/pinn/` — PINN 模型、PDE 残差损失、训练循环、配点采样
+- `src/pinn/` — PINN 模型、PDE 残差损失、训练循环（含验证/Early Stop/最优模型保存）、配点采样
 - `src/utils/` — 解析解、误差度量、可视化
 - `configs/default.yaml` — 实验配置（网格大小、时间步长、网络结构、学习率）
-- `scripts/` — 入口脚本：`run_fem.py`、`run_pinn.py`、`compare.py`
+- `scripts/` — 入口脚本：`run_fem.py`、`run_pinn.py`（`compare.py` 尚未实现）
 
 ## 常用命令
 
 ```bash
 conda activate agent
-python scripts/run_fem.py --config configs/default.yaml
-python scripts/run_pinn.py --config configs/default.yaml
-python scripts/compare.py --config configs/default.yaml
+PYTHONIOENCODING=utf-8 python scripts/run_fem.py --config configs/default.yaml
+PYTHONIOENCODING=utf-8 python scripts/run_pinn.py --config configs/default.yaml
 ```
 
 ## 问题定义
@@ -44,7 +43,7 @@ python scripts/compare.py --config configs/default.yaml
 求解的 PDE：∂u/∂t = α(∂²u/∂x² + ∂²u/∂y²) + f(x,y,t)，定义域 [0,1]²，Dirichlet 边界条件。计划四个实验场景（详见 `docs/experiments.md`）：无源项齐次 Dirichlet、制造解、高斯局部热源、非齐次边界温度驱动。
 
 FEM 半离散系统：(M + Δt·K)Uⁿ⁺¹ = M·Uⁿ + Δt·Fⁿ⁺¹
-PINN 总损失：λ_r·L_PDE + λ_ic·L_IC + λ_bc·L_BC，通过 autograd 计算残差。
+PINN 总损失：λ_r·L_PDE + λ_ic·L_IC + λ_bc·L_BC，通过 autograd 计算残差。支持时间泛化验证（val_time_ratio）、Early Stop（early_stop_patience）、最优模型保存（best_model.pt）。
 
 ## 文档
 
@@ -79,4 +78,4 @@ results/
 - PINN：网络结构，如 `20260503_100000_4x64`
 - 可通过 `--name` 参数自定义目录名
 
-每次实验必须包含：figures/、summary.json、config_snapshot.yaml
+每次实验必须包含：figures/、summary.json、config_snapshot.yaml。PINN 实验额外包含 best_model.pt（最优模型 checkpoint）。

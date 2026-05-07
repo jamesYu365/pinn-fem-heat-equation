@@ -17,6 +17,7 @@ from src.fem.solver import solve_implicit_euler
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
 from src.utils.visualization import plot_comparison_2x3, plot_error_over_time
+from src.utils.seed import set_seed
 
 
 def main():
@@ -37,6 +38,8 @@ def main():
     T_end = config["fem"]["T_end"]
     alpha = config["physics"]["alpha"]
     case = config["case"]
+
+    set_seed(config.get("seed", 42))
 
     # 实验目录：results/case{N}/fem/{时间戳}_{参数}/
     if args.name:
@@ -104,7 +107,7 @@ def main():
     u_exact_final = case1_exact(nodes[:, 0], nodes[:, 1], T_end, alpha)
 
     # 时间曲线：3 个监测点
-    monitor_locs = [(0.25, 0.25), (0.5, 0.5), (0.75, 0.75)]
+    monitor_locs = [(0.25, 0.25), (0.25, 0.50), (0.50, 0.50)]
     ts_u_pred = []
     ts_u_exact = []
     for (x0, y0) in monitor_locs:

@@ -4,17 +4,20 @@
 
 本项目探索传统数值方法 **Galerkin 有限元方法（FEM）** 与 **物理信息神经网络（PINN）** 在二维非稳态热传导方程求解上的性能差异。对比维度包括求解精度、计算开销、连续场重建能力及物理约束满足程度。
 
-> 当前项目处于开发初期，README 将随着代码实现、实验结果和可视化内容持续更新。
+> Case 1（无源项齐次 Dirichlet）的 FEM 和 PINN 正问题已完整实现，包含训练/验证/测试流水线。
 
 ---
 
 ## 功能亮点 (Features)
 
-* 实现二维非稳态热传导方程 **Galerkin FEM** 求解器
+* 实现二维非稳态热传导方程 **Galerkin FEM** 求解器（隐式 Euler 时间推进）
 * 基于 PyTorch 构建 **PINN** 模型，学习连续温度场
 * 支持多实验场景：解析解验证、制造解、局部热源扩散、非齐次边界温度驱动
-* 对比两类方法在精度、效率、温度场重建上的差异
-* 自动生成可视化图像：温度场、误差分布、损失曲线
+* 完整的训练/验证/测试体系：独立验证配点、Early Stop、最优模型保存
+* 时间泛化验证：训练在部分时间域，测试模型在未见时间段上的外推能力
+* 2×3 综合对比可视化：温度场 + 时间曲线 + 切面分析
+* 损失分量曲线可视化：训练/验证/PDE/IC/BC 五线对比
+* 支持 GPU 加速训练（CUDA）
 * 文档记录解析解推导、实验日志和 daily log
 
 ---
@@ -25,35 +28,17 @@
 pinn-fem-heat-equation/
 ├── README.md
 ├── requirements.txt
-├── docs/                  # 存放文档：解析解推导、实验记录、daily log
 ├── configs/
-│   └── default.yaml
-├── src/
-│   ├── fem/               # FEM 相关模块
-│   │   ├── mesh.py
-│   │   ├── assemble.py
-│   │   ├── solver.py
-│   │   └── boundary.py
-│   ├── pinn/              # PINN 相关模块
-│   │   ├── model.py
-│   │   ├── loss.py
-│   │   ├── train.py
-│   │   └── sampling.py
-│   ├── utils/             # 工具函数
-│   │   ├── exact_solution.py
-│   │   ├── metrics.py
-│   │   └── visualization.py
-│   └── main.py
+│   └── default.yaml        # 实验配置（FEM/PINN 参数）
+├── docs/                    # 文档：推导、实验记录、日志
 ├── scripts/
-│   ├── run_fem.py
-│   ├── run_pinn.py
-│   └── compare.py
-├── results/
-│   ├── figures/
-│   └── logs/
-└── tests/
-    ├── test_fem.py
-    └── test_pinn.py
+│   ├── run_fem.py           # FEM 入口脚本
+│   └── run_pinn.py          # PINN 入口脚本
+├── src/
+│   ├── fem/                 # FEM 模块：网格、组装、求解器
+│   ├── pinn/                # PINN 模块：模型、损失、采样、训练
+│   └── utils/               # 工具：解析解、误差度量、可视化
+└── results/                 # 实验结果（按 case/method 组织）
 ```
 
 ---
@@ -63,25 +48,20 @@ pinn-fem-heat-equation/
 安装依赖：
 
 ```bash
+conda activate agent
 pip install -r requirements.txt
 ```
 
 运行 FEM 求解器：
 
 ```bash
-python scripts/run_fem.py --config configs/default.yaml
+PYTHONIOENCODING=utf-8 python scripts/run_fem.py --config configs/default.yaml
 ```
 
 训练 PINN：
 
 ```bash
-python scripts/run_pinn.py --config configs/default.yaml
-```
-
-对比 FEM 与 PINN 结果：
-
-```bash
-python scripts/compare.py --config configs/default.yaml
+PYTHONIOENCODING=utf-8 python scripts/run_pinn.py --config configs/default.yaml
 ```
 
 ---
@@ -228,10 +208,15 @@ $$
 
 ## 当前进度
 
-* [ ] 确定测试问题与解析解
-* [ ] FEM 核心模块实现（网格生成、矩阵组装、边界条件、时间推进）
-* [ ] PINN 网络结构与损失函数实现
-* [ ] 实验对比与可视化
+* [x] 确定测试问题与解析解
+* [x] FEM 核心模块实现（网格生成、矩阵组装、边界条件、隐式 Euler 时间推进）
+* [x] PINN 正问题实现（模型、PDE 残差损失、配点采样、训练循环）
+* [x] 验证体系（独立验证配点、网格误差回调、Early Stop、最优模型保存）
+* [x] 时间泛化验证（训练域/外推域分离评估）
+* [x] 综合可视化（2×3 对比图：温度场 + 时间曲线 + 切面分析）
+* [ ] PINN 反问题（参数发现，从稀疏观测数据学习 α）
+* [ ] Case 2-4 实验场景
+* [ ] FEM 与 PINN 对比脚本
 
 ---
 
@@ -244,12 +229,10 @@ FEM 与 PINN 的联合实现与对比研究
 
 ## 文档 (docs)
 
-在 `docs/` 文件夹中可添加：
-
-* `derivations.md`：解析解与弱形式推导
-* `experiments.md`：实验记录
-* `daily_log.md`：日常开发日志
-* `references.md`：文献和公式笔记
+* `docs/derivations.md`：解析解与弱形式推导
+* `docs/experiments.md`：实验配置与结果记录
+* `docs/daily_log.md`：开发日志
+* `docs/references.md`：参考文献
 
 ---
 
