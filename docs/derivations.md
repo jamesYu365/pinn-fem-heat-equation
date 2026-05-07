@@ -23,7 +23,92 @@ $$
 
 ## 2. 弱形式推导
 
-（在此记录 FEM 弱形式推导步骤与公式）
+### 2.1 从强形式出发
+
+强形式（原始 PDE）：
+
+$$
+\frac{\partial u}{\partial t} = \alpha \left( \frac{\partial^2 u}{\partial x^2} + \frac{\partial^2 u}{\partial y^2} \right) + f(x, y, t), \quad (x, y) \in \Omega
+$$
+
+等价地用 Laplacian 记号：
+
+$$
+\frac{\partial u}{\partial t} - \alpha \nabla^2 u = f
+$$
+
+### 2.2 乘以测试函数并积分
+
+引入测试函数 $v(x, y) \in H_0^1(\Omega)$（在边界上 $v = 0$），两边乘以 $v$ 并在 $\Omega$ 上积分：
+
+$$
+\int_\Omega \frac{\partial u}{\partial t} v \, d\Omega - \int_\Omega \alpha \nabla^2 u \cdot v \, d\Omega = \int_\Omega f v \, d\Omega
+$$
+
+### 2.3 对二阶导数项使用分部积分（Green 第一公式）
+
+对第二项使用分部积分，将一个导数从 $u$ 转移到 $v$：
+
+$$
+\int_\Omega \alpha \nabla^2 u \cdot v \, d\Omega = \int_{\partial \Omega} \alpha \frac{\partial u}{\partial n} v \, ds - \int_\Omega \alpha \nabla u \cdot \nabla v \, d\Omega
+$$
+
+因为 $v$ 在边界 $\partial \Omega$ 上为零（$v|_{\partial \Omega} = 0$），边界项消失：
+
+$$
+\int_\Omega \alpha \nabla^2 u \cdot v \, d\Omega = - \int_\Omega \alpha \nabla u \cdot \nabla v \, d\Omega
+$$
+
+### 2.4 最终弱形式
+
+代回原式得到弱形式：
+
+$$
+\int_\Omega \frac{\partial u}{\partial t} v \, d\Omega + \int_\Omega \alpha \nabla u \cdot \nabla v \, d\Omega = \int_\Omega f v \, d\Omega
+$$
+
+或简记为：求 $u(\cdot, t) \in H^1(\Omega)$ 满足 $u|_{\partial \Omega} = g$，使得对任意 $v \in H_0^1(\Omega)$：
+
+$$
+\left( \frac{\partial u}{\partial t}, v \right) + a(u, v) = (f, v)
+$$
+
+其中双线性型 $a(u, v) = \int_\Omega \alpha \nabla u \cdot \nabla v \, d\Omega$。
+
+### 2.5 空间离散（Galerkin 投影）
+
+将 $u$ 用有限元基函数展开：
+
+$$
+u_h(x, y, t) = \sum_{j=1}^{N} U_j(t) \phi_j(x, y)
+$$
+
+取测试函数 $v = \phi_i$，代入弱形式得到半离散常微分方程组：
+
+$$
+M \frac{dU}{dt} + K U = F
+$$
+
+其中：
+- 质量矩阵 $M_{ij} = \int_\Omega \phi_i \phi_j \, d\Omega$
+- 刚度矩阵 $K_{ij} = \int_\Omega \alpha \nabla \phi_i \cdot \nabla \phi_j \, d\Omega$
+- 载荷向量 $F_i = \int_\Omega f \phi_i \, d\Omega$
+
+### 2.6 时间离散（隐式 Euler）
+
+对 $\frac{dU}{dt}$ 用后向差分：
+
+$$
+M \frac{U^{n+1} - U^n}{\Delta t} + K U^{n+1} = F^{n+1}
+$$
+
+整理得线性系统：
+
+$$
+(M + \Delta t \cdot K) U^{n+1} = M U^n + \Delta t \cdot F^{n+1}
+$$
+
+每步求解一个稀疏线性系统即可得到 $U^{n+1}$。
 
 ## 3. Case 1：无源项齐次 Dirichlet 解析解推导
 
