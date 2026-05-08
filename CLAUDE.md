@@ -10,7 +10,7 @@
 
 ## 项目概述
 
-二维非稳态热传导方程求解器，对比 Galerkin 有限元方法（FEM）与物理信息神经网络（PINN）。FEM 使用 NumPy/SciPy，PINN 使用 PyTorch。Case 1（无源项齐次 Dirichlet）FEM 和 PINN 正问题已完整实现，包含训练/验证/测试流水线、时间泛化验证和 Early Stop。
+二维非稳态热传导方程求解器，对比 Galerkin 有限元方法（FEM）与物理信息神经网络（PINN）。FEM 使用 NumPy/SciPy，PINN 使用 PyTorch。Case 1 的 FEM 和 PINN 正问题已完整实现；PINN 反问题（参数发现）已实现：从稀疏带噪声观测数据中学习未知热扩散系数 α（softplus 变换保证正性）。
 
 ## 环境配置
 
@@ -25,10 +25,10 @@ pip install -r requirements.txt
 ## 架构规划
 
 - `src/fem/` — Galerkin FEM 流水线：网格生成、质量/刚度矩阵组装、边界条件、隐式 Euler 时间推进
-- `src/pinn/` — PINN 模型、PDE 残差损失、训练循环（含验证/Early Stop/最优模型保存）、配点采样
-- `src/utils/` — 解析解、误差度量、可视化
-- `configs/default.yaml` — 实验配置（网格大小、时间步长、网络结构、学习率）
-- `scripts/` — 入口脚本：`run_fem.py`、`run_pinn.py`（`compare.py` 尚未实现）
+- `src/pinn/` — PINN 模型、PDE 残差损失、训练循环（正问题/反问题）、配点采样、学习率调度
+- `src/utils/` — 解析解、误差度量、可视化、随机种子
+- `configs/default.yaml` — 实验配置（网格大小、时间步长、网络结构、学习率、反问题参数）
+- `scripts/` — 入口脚本：`run_fem.py`、`run_pinn.py`、`run_pinn_inverse.py`（`compare.py` 尚未实现）
 
 ## 常用命令
 
@@ -36,6 +36,7 @@ pip install -r requirements.txt
 conda activate agent
 PYTHONIOENCODING=utf-8 python scripts/run_fem.py --config configs/default.yaml
 PYTHONIOENCODING=utf-8 python scripts/run_pinn.py --config configs/default.yaml
+PYTHONIOENCODING=utf-8 python scripts/run_pinn_inverse.py --config configs/default.yaml
 ```
 
 ## 问题定义
@@ -43,7 +44,8 @@ PYTHONIOENCODING=utf-8 python scripts/run_pinn.py --config configs/default.yaml
 求解的 PDE：∂u/∂t = α(∂²u/∂x² + ∂²u/∂y²) + f(x,y,t)，定义域 [0,1]²，Dirichlet 边界条件。计划四个实验场景（详见 `docs/experiments.md`）：无源项齐次 Dirichlet、制造解、高斯局部热源、非齐次边界温度驱动。
 
 FEM 半离散系统：(M + Δt·K)Uⁿ⁺¹ = M·Uⁿ + Δt·Fⁿ⁺¹
-PINN 总损失：λ_r·L_PDE + λ_ic·L_IC + λ_bc·L_BC，通过 autograd 计算残差。支持时间泛化验证（val_time_ratio）、Early Stop（early_stop_patience）、最优模型保存（best_model.pt）。
+PINN 正问题总损失：λ_r·L_PDE + λ_ic·L_IC + λ_bc·L_BC，通过 autograd 计算残差。支持时间泛化验证（val_time_ratio）、Early Stop（early_stop_patience）、最优模型保存（best_model.pt）。
+PINN 反问题总损失：增加 λ_data·L_data 观测数据拟合项，α 通过 softplus(log_alpha) 参数化保证正性，使用独立的 InverseLossBalancer 平衡四项损失。
 
 ## 文档
 
@@ -65,6 +67,8 @@ results/
 │   │       ├── summary.json        # 误差指标 + 运行参数
 │   │       └── config_snapshot.yaml # 配置文件副本
 │   └── pinn/
+│       └── {日期}_{时间}_{网络结构}/
+│   └── pinn_inverse/
 │       └── {日期}_{时间}_{网络结构}/
 ├── case2/
 │   ├── fem/

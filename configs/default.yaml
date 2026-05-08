@@ -40,3 +40,11 @@ pinn:
   num_val_bc: 500
   val_time_ratio: 0.6
   early_stop_patience: 1000
+
+  # 反问题参数
+  inverse:
+    initial_alpha: 0.005
+    num_observation: 200
+    noise_level: 0.01
+    lambda_data: 10.0
+    alpha_lr: 0.001

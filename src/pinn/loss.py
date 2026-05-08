@@ -45,13 +45,27 @@ def bc_loss(model, x, y, t):
     return torch.mean(u_pred ** 2)
 
 
-def component_losses(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha):
-    """返回可反传的 PDE/IC/BC 原始损失张量。"""
-    return {
+def data_loss(model, x, y, t, u_obs):
+    """观测数据拟合损失：MSE(u_pred, u_obs)。"""
+    u_pred = model(x, y, t)
+    return torch.mean((u_pred - u_obs) ** 2)
+
+
+def component_losses(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha,
+                     obs_data=None):
+    """返回可反传的各分量损失张量。
+
+    obs_data: None 或 (x_data, y_data, t_data, u_data) 元组。
+    """
+    losses = {
         "pde": pde_loss(model, x_r, y_r, t_r, alpha),
         "ic": ic_loss(model, x_ic, y_ic),
         "bc": bc_loss(model, x_bc, y_bc, t_bc),
     }
+    if obs_data is not None:
+        x_d, y_d, t_d, u_d = obs_data
+        losses["data"] = data_loss(model, x_d, y_d, t_d, u_d)
+    return losses
 
 
 def total_loss(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc, alpha,

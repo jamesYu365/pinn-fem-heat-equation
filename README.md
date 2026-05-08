@@ -4,7 +4,7 @@
 
 本项目探索传统数值方法 **Galerkin 有限元方法（FEM）** 与 **物理信息神经网络（PINN）** 在二维非稳态热传导方程求解上的性能差异。对比维度包括求解精度、计算开销、连续场重建能力及物理约束满足程度。
 
-> Case 1（无源项齐次 Dirichlet）的 FEM 和 PINN 正问题已完整实现，包含训练/验证/测试流水线。
+> Case 1（无源项齐次 Dirichlet）的 FEM 和 PINN 正问题已完整实现。PINN 反问题（参数发现）已实现：从稀疏带噪声观测数据中学习未知热扩散系数 α。
 
 ---
 
@@ -14,6 +14,8 @@
 * 基于 PyTorch 构建 **PINN** 模型，学习连续温度场
 * 支持多实验场景：解析解验证、制造解、局部热源扩散、非齐次边界温度驱动
 * 完整的训练/验证/测试体系：独立验证配点、Early Stop、最优模型保存
+* PINN 反问题（参数发现）：从稀疏带噪声观测数据中学习未知热扩散系数 α
+* 自适应损失权重平衡（EMA）、warmup + linear decay 学习率调度
 * 时间泛化验证：训练在部分时间域，测试模型在未见时间段上的外推能力
 * 2×3 综合对比可视化：温度场 + 时间曲线 + 切面分析
 * 损失分量曲线可视化：训练/验证/PDE/IC/BC 五线对比
@@ -33,11 +35,12 @@ pinn-fem-heat-equation/
 ├── docs/                    # 文档：推导、实验记录、日志
 ├── scripts/
 │   ├── run_fem.py           # FEM 入口脚本
-│   └── run_pinn.py          # PINN 入口脚本
+│   ├── run_pinn.py          # PINN 正问题入口脚本
+│   └── run_pinn_inverse.py  # PINN 反问题入口脚本
 ├── src/
 │   ├── fem/                 # FEM 模块：网格、组装、求解器
-│   ├── pinn/                # PINN 模块：模型、损失、采样、训练
-│   └── utils/               # 工具：解析解、误差度量、可视化
+│   ├── pinn/                # PINN 模块：模型、损失、采样、训练、学习率调度
+│   └── utils/               # 工具：解析解、误差度量、可视化、随机种子
 └── results/                 # 实验结果（按 case/method 组织）
 ```
 
@@ -62,6 +65,12 @@ PYTHONIOENCODING=utf-8 python scripts/run_fem.py --config configs/default.yaml
 
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/run_pinn.py --config configs/default.yaml
+```
+
+PINN 反问题（参数发现）：
+
+```bash
+PYTHONIOENCODING=utf-8 python scripts/run_pinn_inverse.py --config configs/default.yaml
 ```
 
 ---
@@ -196,6 +205,22 @@ $$
 \mathcal{L} = \lambda_r \mathcal{L}_{PDE} + \lambda_{ic} \mathcal{L}_{IC} + \lambda_{bc} \mathcal{L}_{BC}
 $$
 
+**PINN 反问题（参数发现）**
+
+给定稀疏带噪声的观测数据 $\{(x_i, y_i, t_i, u_i^{obs})\}_{i=1}^{N}$，学习未知热扩散系数 $\alpha$：
+
+$$
+\alpha = \text{softplus}(\hat{\alpha}), \quad \hat{\alpha} \in \mathbb{R} \text{（可学习参数）}
+$$
+
+总损失增加数据拟合项：
+
+$$
+\mathcal{L} = \lambda_r \mathcal{L}_{PDE} + \lambda_{ic} \mathcal{L}_{IC} + \lambda_{bc} \mathcal{L}_{BC} + \lambda_{data} \mathcal{L}_{data}
+$$
+
+其中 $\mathcal{L}_{data} = \frac{1}{N}\sum_{i}(u_\theta(x_i,y_i,t_i) - u_i^{obs})^2$。
+
 ---
 
 ## 对比指标
@@ -214,7 +239,7 @@ $$
 * [x] 验证体系（独立验证配点、网格误差回调、Early Stop、最优模型保存）
 * [x] 时间泛化验证（训练域/外推域分离评估）
 * [x] 综合可视化（2×3 对比图：温度场 + 时间曲线 + 切面分析）
-* [ ] PINN 反问题（参数发现，从稀疏观测数据学习 α）
+* [x] PINN 反问题（参数发现，从稀疏带噪声观测数据学习 α）
 * [ ] Case 2-4 实验场景
 * [ ] FEM 与 PINN 对比脚本
 

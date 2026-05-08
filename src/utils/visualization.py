@@ -194,3 +194,24 @@ def plot_error_over_time(times, l2_errors, max_errors, filename=None):
         plt.close(fig)
     else:
         plt.show()
+
+
+def plot_alpha_learning(alpha_history, true_alpha, filename=None):
+    """绘制 α 学习曲线。"""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    epochs = range(1, len(alpha_history) + 1)
+    ax.plot(epochs, alpha_history, label="学习值 α", linewidth=1.5)
+    ax.axhline(true_alpha, color="red", linestyle="--", linewidth=1.5,
+               label=f"真实值 α={true_alpha}")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("α")
+    ax.set_title("α 学习曲线")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if filename:
+        os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+        fig.savefig(filename, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()

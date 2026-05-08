@@ -44,3 +44,27 @@
 **实验结果**：
 - FEM Case 1：L2 误差 5.86e-04
 - PINN Case 1（时间泛化）：训练域 L2≈0.9%，外推域 L2≈1.8%
+
+---
+
+## 2026-05-08
+
+**工作内容**：
+- 实现 PINN 反问题（参数发现）：从稀疏带噪声观测数据中学习未知热扩散系数 α
+- 新增 `data_loss`、扩展 `component_losses` 支持观测数据拟合
+- 新增 `train_inverse()` 训练函数：softplus 变换保证 α 正性、独立 α 学习率、α 学习历史追踪
+- 新增 `InverseLossBalancer`：扩展 AdaptiveLossBalancer 支持四项损失（PDE/IC/BC/Data）
+- 新增 `WarmupLinearScheduler`：warmup + linear decay 学习率调度
+- 修复 AdaptiveLossBalancer EMA 不可达 bug（else 块在 return 之后）
+- 修复 metrics.py 除零风险、visualization.py 规则网格误判、scheduler 边界条件
+- 新增 `plot_alpha_learning` α 学习曲线可视化
+- 新增 `run_pinn_inverse.py` 反问题入口脚本
+- 新增 `set_seed()` 固定所有随机性（Python/NumPy/PyTorch/CUDA）
+- 监测点改为非对称布局，消除时间曲线重合
+- 修复误差分布图条纹伪影（规则网格自动使用 contourf）
+- 自适应损失权重、分层采样、可重复性种子
+- 更新所有文档（README、CLAUDE.md、experiments.md、daily_log.md）
+
+**实验结果**：
+- 学习率衰减有效解决了 IC/BC loss spike 问题
+- 反问题 α 学习结果：待实验运行
