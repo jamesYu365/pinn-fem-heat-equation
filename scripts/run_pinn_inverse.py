@@ -319,7 +319,21 @@ def main():
     with torch.no_grad():
         t_t = torch.full_like(x_t_grid, T_end)
         u_final = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
+        # 观测点处的模型预测
+        u_pred_obs_train = model(x_obs, y_obs, t_obs).cpu().numpy().flatten()
+        u_pred_obs_val = None
+        if x_obs_val is not None:
+            u_pred_obs_val = model(x_obs_val, y_obs_val, t_obs_val).cpu().numpy().flatten()
     u_exact_final = case1_exact(x_flat, y_flat, T_end, true_alpha)
+
+    obs_plot_data = {
+        "t_train": t_obs.cpu().numpy().flatten(),
+        "u_train": u_obs.cpu().numpy().flatten(),
+        "u_pred_train": u_pred_obs_train,
+        "t_val": t_obs_val.cpu().numpy().flatten() if x_obs_val is not None else None,
+        "u_val": u_obs_val.cpu().numpy().flatten() if x_obs_val is not None else None,
+        "u_pred_val": u_pred_obs_val,
+    }
 
     plot_comparison_2x3(
         nodes, u_final, u_exact_final, T_end,
@@ -327,6 +341,8 @@ def main():
         ts_data={"times": ts_times, "locations": MONITOR_LOCS,
                  "u_pred": ts_u_pred, "u_exact": ts_u_exact},
         cs_data={"y": cs_y, "u_pred": cs_u_pred, "u_exact": cs_u_exact},
+        T_train=T_train if time_generalization else None,
+        obs_data=obs_plot_data,
     )
 
     plot_inverse_training(

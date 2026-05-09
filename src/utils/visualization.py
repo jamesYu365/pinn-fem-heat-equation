@@ -50,21 +50,35 @@ def _fill_field(ax, nodes, values, levels=50, **contourf_kwargs):
                               vmin=vmin, vmax=vmax, **contourf_kwargs)
 
 
-def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PINN",
-                        ts_data=None, cs_data=None, T_train=None):
-    """绘制 2×3 对比图。
+def _add_train_val_split(ax, T_train):
+    """在时间轴子图上画训练/验证分界线。"""
+    ax.axvline(T_train, color="gray", linestyle=":", linewidth=1.5,
+               label=f"T_train={T_train:.2f}")
+    ylim = ax.get_ylim()
+    ymid = (ylim[0] + ylim[1]) / 2
+    ax.text(T_train, ymid, " 训练|验证 ", fontsize=7,
+            color="gray", va="center", ha="center",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
 
-    Row 1: 解析解 | 数值解 | 误差分布
-    Row 2 (可选): 时间曲线 | x=0.5 切面 | 误差切面
+
+def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PINN",
+                        ts_data=None, cs_data=None, T_train=None, obs_data=None):
+    """绘制对比图。
+
+    正问题: 2×3 — Row 1: 空间场 | Row 2: 时间曲线+切面
+    反问题: 3×3 — Row 3: 训练观测 | 验证观测 | 观测vs预测
 
     参数:
-        nodes: (N, 2) 节点坐标，支持规则网格和非结构网格
+        nodes: (N, 2) 节点坐标
         ts_data: dict, keys: 'times', 'locations', 'u_pred', 'u_exact'
         cs_data: dict, keys: 'y', 'u_pred', 'u_exact'
-        T_train: 训练时间上限，在时间曲线图中画竖线区分训练/外推域
+        T_train: 训练时间上限，画竖线区分训练/验证域
+        obs_data: dict, keys: 't_train', 'u_train', 'u_pred_train',
+                  't_val', 'u_val', 'u_pred_val'（仅反问题）
     """
     has_row2 = ts_data is not None and cs_data is not None
-    nrows = 2 if has_row2 else 1
+    has_row3 = obs_data is not None
+    nrows = 3 if has_row3 else (2 if has_row2 else 1)
     fig, axes = plt.subplots(nrows, 3, figsize=(16, 4.5 * nrows))
     if nrows == 1:
         axes = axes.reshape(1, -1)
@@ -115,13 +129,7 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
                             markeredgewidth=2)
         # 训练/外推分界线
         if T_train is not None:
-            axes[1, 0].axvline(T_train, color="gray", linestyle=":", linewidth=1.5,
-                                label=f"T_train={T_train:.2f}")
-            ylim = axes[1, 0].get_ylim()
-            ymid = (ylim[0] + ylim[1]) / 2
-            axes[1, 0].text(T_train, ymid, " 训练|外推 ", fontsize=7,
-                            color="gray", va="center", ha="center",
-                            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
+            _add_train_val_split(axes[1, 0], T_train)
         axes[1, 0].set_xlabel("t")
         axes[1, 0].set_ylabel("u")
         axes[1, 0].set_title("时间维度变化")
@@ -142,6 +150,61 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
         axes[1, 2].set_ylabel("|u_pred - u_exact|")
         axes[1, 2].set_title(f"x=0.5 误差切面 (t={t_val})")
         axes[1, 2].grid(True, alpha=0.3)
+
+    # Row 3: 观测数据（仅反问题）
+    if has_row3:
+        # 训练观测拟合
+        ax = axes[2, 0]
+        ax.scatter(obs_data["t_train"], obs_data["u_train"],
+                   s=10, alpha=0.5, c="darkorange", label="观测值")
+        ax.scatter(obs_data["t_train"], obs_data["u_pred_train"],
+                   s=10, alpha=0.5, c="purple", marker="x", label="模型预测")
+        if T_train is not None:
+            _add_train_val_split(ax, T_train)
+        ax.set_xlabel("t")
+        ax.set_ylabel("u")
+        ax.set_title("训练观测拟合")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # 验证观测拟合
+        ax = axes[2, 1]
+        if obs_data.get("t_val") is not None:
+            ax.scatter(obs_data["t_val"], obs_data["u_val"],
+                       s=10, alpha=0.5, c="darkorange", label="观测值")
+            ax.scatter(obs_data["t_val"], obs_data["u_pred_val"],
+                       s=10, alpha=0.5, c="purple", marker="x", label="模型预测")
+        else:
+            ax.text(0.5, 0.5, "无验证观测数据", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=10, color="gray")
+        if T_train is not None:
+            _add_train_val_split(ax, T_train)
+        ax.set_xlabel("t")
+        ax.set_ylabel("u")
+        ax.set_title("验证观测拟合")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # 观测 vs 预测散点图
+        ax = axes[2, 2]
+        ax.scatter(obs_data["u_train"], obs_data["u_pred_train"],
+                   s=10, alpha=0.5, c="darkorange", label="训练")
+        if obs_data.get("u_val") is not None:
+            ax.scatter(obs_data["u_val"], obs_data["u_pred_val"],
+                       s=10, alpha=0.5, c="purple", marker="x", label="验证")
+        all_u = np.concatenate([obs_data["u_train"], obs_data["u_pred_train"]])
+        if obs_data.get("u_val") is not None:
+            all_u = np.concatenate([all_u, obs_data["u_val"], obs_data["u_pred_val"]])
+        umin, umax = all_u.min(), all_u.max()
+        margin = (umax - umin) * 0.05
+        ax.plot([umin - margin, umax + margin], [umin - margin, umax + margin],
+                "k--", linewidth=1, label="y=x")
+        ax.set_xlabel("u_obs")
+        ax.set_ylabel("u_pred")
+        ax.set_title("观测 vs 预测")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect("equal")
 
     plt.tight_layout()
     if filename:
@@ -248,40 +311,84 @@ def _draw_scatter(ax, x_r, y_r, x_bc, y_bc, x_ic, y_ic, x_obs, y_obs, title):
     ax.set_ylim(0, 1)
 
 
+def _setup_sampling_ax(ax, title, xlim_margin=0.03):
+    """配置采样点子图的通用样式。"""
+    ax.set_title(title, loc="left", fontsize=11)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal")
+    ax.set_xlim(-xlim_margin, 1 + xlim_margin)
+    ax.set_ylim(-xlim_margin, 1 + xlim_margin)
+
+
 def plot_sampling_points(train_data=None, val_data=None,
                          x_obs=None, y_obs=None,
                          x_obs_val=None, y_obs_val=None,
                          filename=None, title_prefix=""):
     """绘制采样点分布图。
 
-    2×1 布局（有验证集时）或 1×1（无验证集）：
-    上：训练集（配点+BC+IC+观测）
-    下：验证集（配点+BC+IC+验证观测）
+    正问题：1×3 — PDE | IC | BC
+    反问题：1×4 — PDE | IC | BC | 观测
+    训练点用实心标记，验证点用 × 标记（不同颜色）。
     """
     has_val = val_data is not None
-    nrows = 2 if has_val else 1
-    fig, axes = plt.subplots(nrows, 1, figsize=(8, 5 * nrows))
-    if nrows == 1:
-        axes = [axes]
+    has_obs = x_obs is not None and y_obs is not None
+    n_plots = 4 if has_obs else 3
+    fig_w = 5.5 * n_plots
+    fig, axes = plt.subplots(1, n_plots, figsize=(fig_w, 5.5))
+    leg_kwargs = dict(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, 1.08),
+                      ncol=2, framealpha=0.8)
 
-    _draw_scatter(
-        axes[0],
-        train_data.get("x_r"), train_data.get("y_r"),
-        train_data.get("x_bc"), train_data.get("y_bc"),
-        train_data.get("x_ic"), train_data.get("y_ic"),
-        x_obs, y_obs,
-        f"{title_prefix}训练集",
-    )
+    # PDE 配点
+    ax = axes[0]
+    if train_data.get("x_r") is not None:
+        ax.scatter(np.asarray(train_data["x_r"]).flatten(),
+                   np.asarray(train_data["y_r"]).flatten(),
+                   s=4, alpha=0.5, c="darkorange", label="训练")
+    if has_val and val_data.get("x_r") is not None:
+        ax.scatter(np.asarray(val_data["x_r"]).flatten(),
+                   np.asarray(val_data["y_r"]).flatten(),
+                   s=8, alpha=0.6, c="purple", label="验证", marker="x")
+    _setup_sampling_ax(ax, f"{title_prefix}PDE残差配点")
+    ax.legend(**leg_kwargs)
 
-    if has_val:
-        _draw_scatter(
-            axes[1],
-            val_data.get("x_r"), val_data.get("y_r"),
-            val_data.get("x_bc"), val_data.get("y_bc"),
-            val_data.get("x_ic"), val_data.get("y_ic"),
-            x_obs_val, y_obs_val,
-            f"{title_prefix}验证集",
-        )
+    # IC 配点
+    ax = axes[1]
+    if train_data.get("x_ic") is not None:
+        ax.scatter(np.asarray(train_data["x_ic"]).flatten(),
+                   np.asarray(train_data["y_ic"]).flatten(),
+                   s=6, alpha=0.5, c="darkorange", label="训练")
+    if has_val and val_data.get("x_ic") is not None:
+        ax.scatter(np.asarray(val_data["x_ic"]).flatten(),
+                   np.asarray(val_data["y_ic"]).flatten(),
+                   s=8, alpha=0.6, c="purple", label="验证", marker="x")
+    _setup_sampling_ax(ax, f"{title_prefix}IC 配点")
+    ax.legend(**leg_kwargs)
+
+    # BC 配点
+    ax = axes[2]
+    if train_data.get("x_bc") is not None:
+        ax.scatter(np.asarray(train_data["x_bc"]).flatten(),
+                   np.asarray(train_data["y_bc"]).flatten(),
+                   s=10, alpha=0.6, c="darkorange", label="训练", marker="s")
+    if has_val and val_data.get("x_bc") is not None:
+        ax.scatter(np.asarray(val_data["x_bc"]).flatten(),
+                   np.asarray(val_data["y_bc"]).flatten(),
+                   s=10, alpha=0.6, c="purple", label="验证", marker="x")
+    _setup_sampling_ax(ax, f"{title_prefix}BC 配点")
+    ax.legend(**leg_kwargs)
+
+    # 观测数据（仅反问题）
+    if has_obs:
+        ax = axes[3]
+        ax.scatter(np.asarray(x_obs).flatten(), np.asarray(y_obs).flatten(),
+                   s=30, alpha=0.8, c="darkorange", label="训练", marker="*")
+        if x_obs_val is not None and y_obs_val is not None:
+            ax.scatter(np.asarray(x_obs_val).flatten(),
+                       np.asarray(y_obs_val).flatten(),
+                       s=15, alpha=0.6, c="purple", label="验证", marker="x")
+        _setup_sampling_ax(ax, f"{title_prefix}观测数据")
+        ax.legend(**leg_kwargs)
 
     plt.tight_layout()
     if filename:

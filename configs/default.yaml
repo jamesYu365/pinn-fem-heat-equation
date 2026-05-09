@@ -47,4 +47,4 @@ pinn:
     num_observation: 200
     noise_level: 0.01
     lambda_data: 10.0
-    alpha_lr: 0.001
+    alpha_lr: 0.005
