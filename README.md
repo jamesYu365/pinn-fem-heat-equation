@@ -75,6 +75,8 @@ PINN 反问题（参数发现）：
 PYTHONIOENCODING=utf-8 python scripts/run_pinn_inverse.py --config configs/default.yaml
 ```
 
+反问题观测点、PDE/IC/BC 配点和训练/验证拆分方式见 `docs/experiments.md`。
+
 ---
 
 ## 问题定义
