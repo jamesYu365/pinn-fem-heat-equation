@@ -17,10 +17,30 @@ from src.pinn.sampling import sample_collocation, sample_initial, sample_boundar
 from src.pinn.train import train_inverse
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
-from src.utils.visualization import plot_comparison_2x3, plot_loss_with_components, plot_alpha_learning
+from src.utils.visualization import (plot_comparison_2x3, plot_inverse_training,
+                                     plot_sampling_points)
 from src.utils.seed import set_seed
 
 MONITOR_LOCS = [(0.25, 0.25), (0.25, 0.50), (0.50, 0.50)]
+
+
+def require_case1(case):
+    """当前 PINN 反问题只实现 Case 1，避免配置切换后生成误导性结果。"""
+    if case != 1:
+        raise NotImplementedError(
+            f"当前 PINN 反问题入口只实现 Case 1，但配置为 case={case}。"
+            "请先实现对应 PDE 源项、IC、BC、观测生成和解析解后再运行。"
+        )
+
+
+def validate_validation_counts(n_col, n_ic, n_bc):
+    """验证损失会同时计算 PDE/IC/BC，三类验证配点必须同时启用或同时关闭。"""
+    counts = [n_col, n_ic, n_bc]
+    if any(count > 0 for count in counts) and not all(count > 0 for count in counts):
+        raise ValueError(
+            "验证配点必须同时设置 num_val_collocation、num_val_ic、num_val_bc，"
+            f"当前为 {counts}，否则空张量会导致验证损失为 nan。"
+        )
 
 
 def generate_observation_data(n_points, T_end, true_alpha, noise_level, device):
@@ -56,6 +76,7 @@ def main():
     case = config["case"]
     pinn_cfg = config["pinn"]
     inv_cfg = pinn_cfg["inverse"]
+    require_case1(case)
 
     set_seed(config.get("seed", 42))
 
@@ -63,6 +84,13 @@ def main():
     print(f"=== PINN 反问题 (Case {case}, 参数发现) ===")
     print(f"设备: {device}")
     print(f"真实 α={true_alpha}, 初始猜测 α={inv_cfg['initial_alpha']}")
+
+    # 时间泛化参数
+    val_time_ratio = pinn_cfg.get("val_time_ratio", 1.0)
+    T_train = val_time_ratio * T_end
+    time_generalization = val_time_ratio < 1.0
+    if time_generalization:
+        print(f"时间泛化: 训练 t∈[0, {T_train:.3f}], 外推 t∈({T_train:.3f}, {T_end:.3f}]")
 
     # 实验目录
     layers = pinn_cfg["layers"]
@@ -77,26 +105,98 @@ def main():
     os.makedirs(fig_dir, exist_ok=True)
     print(f"实验目录: {run_dir}")
 
-    # ---- 1. 观测数据 ----
+    # ---- 1. 观测数据（按时间划分训练/验证） ----
     n_obs = inv_cfg["num_observation"]
     noise_level = inv_cfg["noise_level"]
-    x_obs, y_obs, t_obs, u_obs = generate_observation_data(
+    # 先在全时间域生成，再按时间拆分
+    x_obs_all, y_obs_all, t_obs_all, u_obs_all = generate_observation_data(
         n_obs, T_end, true_alpha, noise_level, device,
     )
-    print(f"观测数据: {n_obs} 点, 噪声 σ={noise_level}")
+    if time_generalization:
+        train_mask = t_obs_all.flatten() <= T_train
+        val_mask = ~train_mask
+        x_obs, y_obs, t_obs, u_obs = (
+            x_obs_all[train_mask], y_obs_all[train_mask],
+            t_obs_all[train_mask], u_obs_all[train_mask],
+        )
+        if val_mask.sum() > 0:
+            x_obs_val, y_obs_val, t_obs_val, u_obs_val = (
+                x_obs_all[val_mask], y_obs_all[val_mask],
+                t_obs_all[val_mask], u_obs_all[val_mask],
+            )
+        else:
+            x_obs_val = y_obs_val = t_obs_val = u_obs_val = None
+            print("  警告：所有观测数据都在训练域内，验证观测数据为空")
+        n_val_obs = int(val_mask.sum()) if x_obs_val is not None else 0
+        print(f"观测数据: {n_obs} 点 (训练 {int(train_mask.sum())}, "
+              f"验证 {n_val_obs}), 噪声 σ={noise_level}")
+    else:
+        x_obs, y_obs, t_obs, u_obs = x_obs_all, y_obs_all, t_obs_all, u_obs_all
+        x_obs_val = y_obs_val = t_obs_val = u_obs_val = None
+        print(f"观测数据: {n_obs} 点, 噪声 σ={noise_level}")
 
-    # ---- 2. PDE/IC/BC 配点 ----
+    # ---- 2. PDE/IC/BC 配点（训练 t∈[0, T_train]） ----
     n_col = pinn_cfg["num_collocation"]
     n_ic = pinn_cfg["num_ic"]
     n_bc = pinn_cfg["num_bc"]
 
-    x_r, y_r, t_r = sample_collocation(n_col, T_end, device)
+    x_r, y_r, t_r = sample_collocation(n_col, T_train, device)
     x_ic, y_ic = sample_initial(n_ic, device)
-    x_bc, y_bc, t_bc = sample_boundary(n_bc, T_end, device)
+    x_bc, y_bc, t_bc = sample_boundary(n_bc, T_train, device)
 
-    print(f"配点: 域内 {n_col}, IC {n_ic}, BC {n_bc}")
+    print(f"配点: 域内 {n_col}, IC {n_ic}, BC {n_bc}, T_train={T_train:.3f}")
 
-    # ---- 3. 测试网格 ----
+    # ---- 3. 验证集（外推域 t∈(T_train, T_end]） ----
+    n_val_col = pinn_cfg.get("num_val_collocation", 0)
+    n_val_ic = pinn_cfg.get("num_val_ic", 0)
+    n_val_bc = pinn_cfg.get("num_val_bc", 0)
+    validate_validation_counts(n_val_col, n_val_ic, n_val_bc)
+    val_data = None
+    if n_val_col > 0 or n_val_ic > 0 or n_val_bc > 0:
+        if time_generalization:
+            # 验证配点在外推域
+            val_t_r = torch.rand(n_val_col, 1, device=device) * (T_end - T_train) + T_train
+        else:
+            val_t_r = torch.rand(n_val_col, 1, device=device) * T_end
+        val_data = {
+            "x_r": torch.rand(n_val_col, 1, device=device),
+            "y_r": torch.rand(n_val_col, 1, device=device),
+            "t_r": val_t_r,
+            "x_ic": torch.rand(n_val_ic, 1, device=device),
+            "y_ic": torch.rand(n_val_ic, 1, device=device),
+        }
+        if time_generalization:
+            vx_bc, vy_bc, vt_bc = sample_boundary(n_val_bc, T_end - T_train, device)
+            vt_bc = vt_bc + T_train  # 偏移到外推域
+        else:
+            vx_bc, vy_bc, vt_bc = sample_boundary(n_val_bc, T_end, device)
+        val_data["x_bc"] = vx_bc
+        val_data["y_bc"] = vy_bc
+        val_data["t_bc"] = vt_bc
+        # 验证观测数据
+        if x_obs_val is not None and len(x_obs_val) > 0:
+            val_data["obs_data"] = (x_obs_val, y_obs_val, t_obs_val, u_obs_val)
+        print(f"验证配点: 域内 {n_val_col}, IC {n_val_ic}, BC {n_val_bc}"
+              f"{f' + {int(len(x_obs_val))} 观测点' if x_obs_val is not None and len(x_obs_val) > 0 else ''}")
+
+    # 采样点分布图（训练前保存）
+    os.makedirs(fig_dir, exist_ok=True)
+    train_scatter = {
+        "x_r": x_r.cpu(), "y_r": y_r.cpu(),
+        "x_bc": x_bc.cpu(), "y_bc": y_bc.cpu(),
+        "x_ic": x_ic.cpu(), "y_ic": y_ic.cpu(),
+    }
+    val_scatter = {k: v.cpu() for k, v in val_data.items() if k != "obs_data"} if val_data else None
+    plot_sampling_points(
+        train_data=train_scatter, val_data=val_scatter,
+        x_obs=x_obs.cpu(), y_obs=y_obs.cpu(),
+        x_obs_val=x_obs_val.cpu() if x_obs_val is not None else None,
+        y_obs_val=y_obs_val.cpu() if y_obs_val is not None else None,
+        filename=os.path.join(fig_dir, "sampling_points.png"),
+        title_prefix="反问题 ",
+    )
+
+    # ---- 4. 测试网格 ----
     nx_eval = 50
     x_lin = np.linspace(0, 1, nx_eval)
     y_lin = np.linspace(0, 1, nx_eval)
@@ -109,12 +209,12 @@ def main():
     x_t_grid = torch.tensor(x_flat, dtype=torch.float32).unsqueeze(1).to(device)
     y_t_grid = torch.tensor(y_flat, dtype=torch.float32).unsqueeze(1).to(device)
 
-    # ---- 4. 构建模型 ----
+    # ---- 5. 构建模型 ----
     model = PINN(layers=layers).to(device)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"网络参数量: {total_params}, 结构: {layers}")
 
-    # ---- 5. 训练 ----
+    # ---- 6. 训练 ----
     loss_weights = {
         "lambda_r": pinn_cfg["lambda_r"],
         "lambda_ic": pinn_cfg["lambda_ic"],
@@ -122,7 +222,7 @@ def main():
         "lambda_data": inv_cfg["lambda_data"],
     }
 
-    (loss_history, components_history, alpha_history,
+    (loss_history, components_history, alpha_history, val_history,
      best_state, best_alpha, best_epoch) = train_inverse(
         model,
         x_r, y_r, t_r,
@@ -136,6 +236,7 @@ def main():
         log_every=pinn_cfg.get("log_every", 300),
         device=device,
         clip_grad_norm=pinn_cfg.get("clip_grad_norm", None),
+        val_data=val_data,
         early_stop_patience=pinn_cfg.get("early_stop_patience", None),
         adaptive_loss=pinn_cfg.get("adaptive_loss", None),
         warmup_epochs=pinn_cfg.get("warmup_epochs", 0),
@@ -152,12 +253,10 @@ def main():
     print(f"\n最终结果: α={best_alpha:.6f} (真实={true_alpha}, 误差={alpha_err:.2f}%)")
     print(f"最优 epoch: {best_epoch}")
 
-    # ---- 6. 测试评估 ----
+    # ---- 7. 测试评估 ----
     l2_errors = []
     max_errors = []
     model.eval()
-    # 用学习到的 α 计算解析解做对比
-    alpha_eval = best_alpha
     with torch.no_grad():
         for t_val in eval_times:
             t_t = torch.full_like(x_t_grid, t_val)
@@ -169,9 +268,8 @@ def main():
             max_errors.append(max_err)
             print(f"  t={t_val:.3f}: L2={l2_err:.6e}, Max={max_err:.6e}")
 
-    # ---- 7. 可视化数据 ----
+    # ---- 8. 可视化数据 ----
     with torch.no_grad():
-        # 时间曲线
         ts_times = np.linspace(0, T_end, 100)
         ts_u_pred = []
         ts_u_exact = []
@@ -184,7 +282,6 @@ def main():
             ts_u_pred.append(u_p)
             ts_u_exact.append(u_e)
 
-        # x=0.5 切面
         n_cs = 100
         cs_y = np.linspace(0, 1, n_cs)
         cs_x = torch.full((n_cs, 1), 0.5, dtype=torch.float32, device=device)
@@ -193,7 +290,8 @@ def main():
         cs_u_pred = model(cs_x, cs_y_t, cs_t).cpu().numpy().flatten()
         cs_u_exact = case1_exact(np.full(n_cs, 0.5), cs_y, T_end, true_alpha)
 
-    # ---- 8. 保存结果 ----
+    # ---- 9. 保存结果 ----
+    best_val = min(val_history) if val_history else None
     summary = {
         "case": case,
         "method": "PINN_inverse",
@@ -208,6 +306,7 @@ def main():
         "noise_level": noise_level,
         "best_epoch": best_epoch,
         "final_loss": float(loss_history[-1]),
+        "best_val_loss": float(best_val) if best_val else None,
         "eval_times": eval_times,
         "l2_errors": [float(e) for e in l2_errors],
         "max_errors": [float(e) for e in max_errors],
@@ -216,7 +315,7 @@ def main():
         json.dump(summary, f, indent=2, ensure_ascii=False)
     shutil.copy2(args.config, os.path.join(run_dir, "config_snapshot.yaml"))
 
-    # ---- 9. 可视化 ----
+    # ---- 10. 可视化 ----
     with torch.no_grad():
         t_t = torch.full_like(x_t_grid, T_end)
         u_final = model(x_t_grid, y_t_grid, t_t).cpu().numpy().flatten()
@@ -230,14 +329,9 @@ def main():
         cs_data={"y": cs_y, "u_pred": cs_u_pred, "u_exact": cs_u_exact},
     )
 
-    plot_loss_with_components(
-        loss_history, components_history,
-        os.path.join(fig_dir, "loss_curve.png"),
-    )
-
-    plot_alpha_learning(
-        alpha_history, true_alpha,
-        os.path.join(fig_dir, "alpha_learning.png"),
+    plot_inverse_training(
+        loss_history, components_history, alpha_history, true_alpha,
+        os.path.join(fig_dir, "inverse_training.png"),
     )
 
     print(f"\n结果: {run_dir}/summary.json")

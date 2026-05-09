@@ -144,6 +144,10 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
                       f"val loss 连续 {early_stop_patience} 步未改善 "
                       f"(best={best_val_loss:.6e})")
                 break
+        elif loss.item() < best_val_loss:
+            best_val_loss = loss.item()
+            best_epoch = epoch
+            best_state = copy.deepcopy(model.state_dict())
 
         if epoch % log_every == 0:
             msg = (f"  Epoch {epoch:6d} | Loss: {loss.item():.6e} "
@@ -159,9 +163,10 @@ def train(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
             if eval_callback is not None:
                 eval_callback(model, epoch)
 
-    # 没有验证集时用最后一个 epoch 的状态
+    # epochs=0 等极端配置下兜底为当前状态
     if best_state is None:
         best_state = copy.deepcopy(model.state_dict())
+        best_epoch = len(loss_history)
 
     return loss_history, components_history, val_history, best_state, best_epoch
 
@@ -241,6 +246,7 @@ class InverseLossBalancer:
 def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
                   obs_data, initial_alpha, true_alpha, epochs, loss_weights,
                   log_every=1000, device="cpu", clip_grad_norm=None,
+                  val_data=None, eval_callback=None,
                   early_stop_patience=None, adaptive_loss=None, warmup_epochs=0,
                   peak_lr=0.005, end_lr=1e-5, alpha_lr=0.001):
     """PINN 反问题训练循环：学习热扩散系数 α。
@@ -250,7 +256,8 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
         initial_alpha: α 的初始猜测值。
         true_alpha: α 的真实值（仅用于日志）。
         alpha_lr: α 的独立学习率。
-        其余参数同 train()。
+        val_data: 验证集字典（与正问题相同结构），基于验证损失追踪最优模型。
+        eval_callback: 回调函数 fn(model, epoch)。
     """
     # 可学习 α：用 log_alpha + softplus 保证正性
     log_alpha = nn.Parameter(torch.tensor(
@@ -271,7 +278,9 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
     loss_history = []
     components_history = []
     alpha_history = []
-    best_loss = float("inf")
+    val_history = []
+
+    best_val_loss = float("inf")
     best_epoch = 0
     best_state = None
     best_log_alpha = None
@@ -302,23 +311,42 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
         components = _serialize_components_inverse(losses, effective_weights)
         components_history.append(components)
 
-        # 追踪最优模型
-        if loss.item() < best_loss:
-            best_loss = loss.item()
+        # 验证集评估
+        if val_data is not None:
+            with torch.enable_grad():
+                val_alpha = torch.nn.functional.softplus(log_alpha)
+                val_obs = val_data.get("obs_data")
+                val_losses = component_losses(
+                    model,
+                    val_data["x_r"], val_data["y_r"], val_data["t_r"],
+                    val_data["x_ic"], val_data["y_ic"],
+                    val_data["x_bc"], val_data["y_bc"], val_data["t_bc"],
+                    val_alpha,
+                    obs_data=val_obs,
+                )
+                val_loss = _weighted_total_inverse(val_losses, effective_weights)
+                val_history.append(val_loss.item())
+
+            if val_loss.item() < best_val_loss:
+                best_val_loss = val_loss.item()
+                best_epoch = epoch
+                best_state = copy.deepcopy(model.state_dict())
+                best_log_alpha = log_alpha.item()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if (early_stop_patience is not None
+                    and patience_counter >= early_stop_patience):
+                print(f"  Early stop at epoch {epoch}: "
+                      f"val loss 连续 {early_stop_patience} 步未改善 "
+                      f"(best={best_val_loss:.6e})")
+                break
+        elif loss.item() < best_val_loss:
+            best_val_loss = loss.item()
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
             best_log_alpha = log_alpha.item()
-            patience_counter = 0
-        else:
-            patience_counter += 1
-
-        # Early stop
-        if (early_stop_patience is not None
-                and patience_counter >= early_stop_patience):
-            print(f"  Early stop at epoch {epoch}: "
-                  f"loss 连续 {early_stop_patience} 步未改善 "
-                  f"(best={best_loss:.6e})")
-            break
 
         if epoch % log_every == 0:
             alpha_err = abs(alpha_val - true_alpha) / true_alpha * 100
@@ -326,15 +354,23 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
                    f"| α={alpha_val:.6f} (err={alpha_err:.1f}%)")
             if "data" in components:
                 msg += f" | Data: {components['data']:.6e}"
+            if val_data is not None:
+                msg += f" | Val: {val_history[-1]:.6e} (best={best_val_loss:.6e})"
             print(msg)
 
+            if eval_callback is not None:
+                eval_callback(model, epoch)
+
+    # epochs=0 等极端配置下兜底为当前状态
     if best_state is None:
         best_state = copy.deepcopy(model.state_dict())
         best_log_alpha = log_alpha.item()
+        best_epoch = len(loss_history)
+        best_val_loss = None
 
     best_alpha = float(torch.nn.functional.softplus(
         torch.tensor(best_log_alpha)
     ).item())
 
-    return (loss_history, components_history, alpha_history,
+    return (loss_history, components_history, alpha_history, val_history,
             best_state, best_alpha, best_epoch)

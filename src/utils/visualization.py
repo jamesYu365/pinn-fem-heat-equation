@@ -33,14 +33,21 @@ def _fill_field(ax, nodes, values, levels=50, **contourf_kwargs):
     """
     n = len(values)
     side = int(np.sqrt(n))
+    # contourf 不支持 vmin/vmax，需要转为显式 levels
+    vmin = contourf_kwargs.pop("vmin", None)
+    vmax = contourf_kwargs.pop("vmax", None)
+    if vmin is not None and vmax is not None:
+        levels_arr = np.linspace(vmin, vmax, levels + 1)
+    else:
+        levels_arr = levels
     if side * side == n and _is_structured_grid(nodes, side):
         x2d = nodes[:, 0].reshape(side, side)
         y2d = nodes[:, 1].reshape(side, side)
         v2d = values.reshape(side, side)
-        return ax.contourf(x2d, y2d, v2d, levels=levels, **contourf_kwargs)
+        return ax.contourf(x2d, y2d, v2d, levels=levels_arr, **contourf_kwargs)
     else:
         return ax.tricontourf(nodes[:, 0], nodes[:, 1], values, levels=levels,
-                              **contourf_kwargs)
+                              vmin=vmin, vmax=vmax, **contourf_kwargs)
 
 
 def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PINN",
@@ -139,7 +146,7 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
     plt.tight_layout()
     if filename:
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
-        fig.savefig(filename, dpi=150)
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
@@ -171,7 +178,7 @@ def plot_loss_with_components(loss_history, components_history, filename=None,
     plt.tight_layout()
     if filename:
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
-        fig.savefig(filename, dpi=150)
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
@@ -190,7 +197,7 @@ def plot_error_over_time(times, l2_errors, max_errors, filename=None):
     plt.tight_layout()
     if filename:
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
-        fig.savefig(filename, dpi=150)
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
@@ -211,7 +218,119 @@ def plot_alpha_learning(alpha_history, true_alpha, filename=None):
     plt.tight_layout()
     if filename:
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
-        fig.savefig(filename, dpi=150)
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def _draw_scatter(ax, x_r, y_r, x_bc, y_bc, x_ic, y_ic, x_obs, y_obs, title):
+    """在一个子图上绘制采样点（配点+BC+IC+观测）。"""
+    if x_r is not None and y_r is not None:
+        ax.scatter(np.asarray(x_r).flatten(), np.asarray(y_r).flatten(),
+                   s=3, alpha=0.4, c="royalblue", label="域内配点")
+    if x_bc is not None and y_bc is not None:
+        ax.scatter(np.asarray(x_bc).flatten(), np.asarray(y_bc).flatten(),
+                   s=8, alpha=0.6, c="green", label="BC 配点", marker="s")
+    if x_ic is not None and y_ic is not None:
+        ax.scatter(np.asarray(x_ic).flatten(), np.asarray(y_ic).flatten(),
+                   s=3, alpha=0.4, c="darkorange", label="IC 配点")
+    if x_obs is not None and y_obs is not None:
+        ax.scatter(np.asarray(x_obs).flatten(), np.asarray(y_obs).flatten(),
+                   s=20, alpha=0.8, c="red", label="观测数据", marker="*")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(title)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.01, 1), loc="upper left",
+               borderaxespad=0)
+    ax.set_aspect("equal")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+
+def plot_sampling_points(train_data=None, val_data=None,
+                         x_obs=None, y_obs=None,
+                         x_obs_val=None, y_obs_val=None,
+                         filename=None, title_prefix=""):
+    """绘制采样点分布图。
+
+    2×1 布局（有验证集时）或 1×1（无验证集）：
+    上：训练集（配点+BC+IC+观测）
+    下：验证集（配点+BC+IC+验证观测）
+    """
+    has_val = val_data is not None
+    nrows = 2 if has_val else 1
+    fig, axes = plt.subplots(nrows, 1, figsize=(8, 5 * nrows))
+    if nrows == 1:
+        axes = [axes]
+
+    _draw_scatter(
+        axes[0],
+        train_data.get("x_r"), train_data.get("y_r"),
+        train_data.get("x_bc"), train_data.get("y_bc"),
+        train_data.get("x_ic"), train_data.get("y_ic"),
+        x_obs, y_obs,
+        f"{title_prefix}训练集",
+    )
+
+    if has_val:
+        _draw_scatter(
+            axes[1],
+            val_data.get("x_r"), val_data.get("y_r"),
+            val_data.get("x_bc"), val_data.get("y_bc"),
+            val_data.get("x_ic"), val_data.get("y_ic"),
+            x_obs_val, y_obs_val,
+            f"{title_prefix}验证集",
+        )
+
+    plt.tight_layout()
+    if filename:
+        os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def plot_inverse_training(loss_history, components_history, alpha_history,
+                          true_alpha, filename=None):
+    """绘制反问题训练过程（2×1）：loss 曲线 + α 学习曲线。"""
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8))
+
+    epochs = range(1, len(loss_history) + 1)
+
+    # 上图：loss
+    pde_losses = [c["pde"] for c in components_history]
+    ic_losses = [c["ic"] for c in components_history]
+    bc_losses = [c["bc"] for c in components_history]
+    data_losses = [c.get("data", 0) for c in components_history]
+
+    ax1.semilogy(epochs, loss_history, label="总损失", color="black", linewidth=1.5)
+    ax1.semilogy(epochs, pde_losses, label="PDE", alpha=0.8)
+    ax1.semilogy(epochs, ic_losses, label="IC", alpha=0.8)
+    ax1.semilogy(epochs, bc_losses, label="BC", alpha=0.8)
+    if any(d > 0 for d in data_losses):
+        ax1.semilogy(epochs, data_losses, label="Data", alpha=0.8)
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss")
+    ax1.set_title("PINN 反问题训练损失")
+    ax1.legend(fontsize=7)
+    ax1.grid(True, alpha=0.3)
+
+    # 下图：α
+    ax2.plot(epochs, alpha_history, label="学习值 α", linewidth=1.5)
+    ax2.axhline(true_alpha, color="red", linestyle="--", linewidth=1.5,
+                label=f"真实值 α={true_alpha}")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("α")
+    ax2.set_title("α 学习曲线")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if filename:
+        os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+        fig.savefig(filename, dpi=150, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()

@@ -20,6 +20,15 @@ from src.utils.visualization import plot_comparison_2x3, plot_error_over_time
 from src.utils.seed import set_seed
 
 
+def require_case1(case):
+    """当前求解器只实现 Case 1，避免配置切换后生成误导性结果。"""
+    if case != 1:
+        raise NotImplementedError(
+            f"当前 FEM 入口只实现 Case 1，但配置为 case={case}。"
+            "请先实现对应初值/边界/源项/解析解后再运行。"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description="FEM 求解二维热传导方程")
     parser.add_argument("--config", type=str, default="configs/default.yaml", help="配置文件路径")
@@ -38,6 +47,7 @@ def main():
     T_end = config["fem"]["T_end"]
     alpha = config["physics"]["alpha"]
     case = config["case"]
+    require_case1(case)
 
     set_seed(config.get("seed", 42))
 

@@ -17,11 +17,30 @@ from src.pinn.sampling import sample_collocation, sample_initial, sample_boundar
 from src.pinn.train import train
 from src.utils.exact_solution import case1_exact
 from src.utils.metrics import relative_l2_error, max_absolute_error
-from src.utils.visualization import plot_comparison_2x3, plot_loss_with_components
+from src.utils.visualization import plot_comparison_2x3, plot_loss_with_components, plot_sampling_points
 from src.utils.seed import set_seed
 
 # 监测点坐标
 MONITOR_LOCS = [(0.25, 0.25), (0.25, 0.50), (0.50, 0.50)]
+
+
+def require_case1(case):
+    """当前 PINN 正问题只实现 Case 1，避免配置切换后生成误导性结果。"""
+    if case != 1:
+        raise NotImplementedError(
+            f"当前 PINN 正问题入口只实现 Case 1，但配置为 case={case}。"
+            "请先实现对应 PDE 源项、IC、BC 和解析解后再运行。"
+        )
+
+
+def validate_validation_counts(n_col, n_ic, n_bc):
+    """验证损失会同时计算 PDE/IC/BC，三类验证配点必须同时启用或同时关闭。"""
+    counts = [n_col, n_ic, n_bc]
+    if any(count > 0 for count in counts) and not all(count > 0 for count in counts):
+        raise ValueError(
+            "验证配点必须同时设置 num_val_collocation、num_val_ic、num_val_bc，"
+            f"当前为 {counts}，否则空张量会导致验证损失为 nan。"
+        )
 
 
 def main():
@@ -38,6 +57,7 @@ def main():
     alpha = config["physics"]["alpha"]
     case = config["case"]
     pinn_cfg = config["pinn"]
+    require_case1(case)
 
     set_seed(config.get("seed", 42))
 
@@ -80,6 +100,7 @@ def main():
     n_val_col = pinn_cfg.get("num_val_collocation", 0)
     n_val_ic = pinn_cfg.get("num_val_ic", 0)
     n_val_bc = pinn_cfg.get("num_val_bc", 0)
+    validate_validation_counts(n_val_col, n_val_ic, n_val_bc)
     val_data = None
     if n_val_col > 0 or n_val_ic > 0 or n_val_bc > 0:
         val_data = {
@@ -94,6 +115,19 @@ def main():
         val_data["y_bc"] = vy_bc
         val_data["t_bc"] = vt_bc
         print(f"验证配点: 域内 {n_val_col}, IC {n_val_ic}, BC {n_val_bc}")
+
+    # 采样点分布图（训练前保存）
+    os.makedirs(fig_dir, exist_ok=True)
+    train_scatter = {
+        "x_r": train_x_r.cpu(), "y_r": train_y_r.cpu(),
+        "x_bc": train_x_bc.cpu(), "y_bc": train_y_bc.cpu(),
+        "x_ic": train_x_ic.cpu(), "y_ic": train_y_ic.cpu(),
+    }
+    val_scatter = {k: v.cpu() for k, v in val_data.items()} if val_data else None
+    plot_sampling_points(
+        train_data=train_scatter, val_data=val_scatter,
+        filename=os.path.join(fig_dir, "sampling_points.png"),
+    )
 
     # ---- 3. 测试网格 ----
     nx_eval = 50
