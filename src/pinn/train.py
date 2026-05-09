@@ -279,11 +279,16 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
     components_history = []
     alpha_history = []
     val_history = []
+    val_components_history = []
 
     best_val_loss = float("inf")
     best_epoch = 0
     best_state = None
     best_log_alpha = None
+    best_data_loss = float("inf")
+    best_data_epoch = 0
+    best_data_alpha = None
+    best_data_state = None
     patience_counter = 0
 
     model.train()
@@ -326,6 +331,8 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
                 )
                 val_loss = _weighted_total_inverse(val_losses, effective_weights)
                 val_history.append(val_loss.item())
+                val_components = _serialize_components_inverse(val_losses, effective_weights)
+                val_components_history.append(val_components)
 
             if val_loss.item() < best_val_loss:
                 best_val_loss = val_loss.item()
@@ -335,6 +342,12 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
                 patience_counter = 0
             else:
                 patience_counter += 1
+
+            if "data" in val_losses and val_losses["data"].item() < best_data_loss:
+                best_data_loss = val_losses["data"].item()
+                best_data_epoch = epoch
+                best_data_alpha = alpha_val
+                best_data_state = copy.deepcopy(model.state_dict())
 
             if (early_stop_patience is not None
                     and patience_counter >= early_stop_patience):
@@ -347,6 +360,11 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
             best_log_alpha = log_alpha.item()
+            if "data" in losses and losses["data"].item() < best_data_loss:
+                best_data_loss = losses["data"].item()
+                best_data_epoch = epoch
+                best_data_alpha = alpha_val
+                best_data_state = copy.deepcopy(model.state_dict())
 
         if epoch % log_every == 0:
             alpha_err = abs(alpha_val - true_alpha) / true_alpha * 100
@@ -372,5 +390,17 @@ def train_inverse(model, x_r, y_r, t_r, x_ic, y_ic, x_bc, y_bc, t_bc,
         torch.tensor(best_log_alpha)
     ).item())
 
+    diagnostics = {
+        "val_components_history": val_components_history,
+        "final_alpha": alpha_history[-1] if alpha_history else best_alpha,
+        "final_train_data_loss": components_history[-1].get("data") if components_history else None,
+        "final_val_data_loss": (
+            val_components_history[-1].get("data") if val_components_history else None
+        ),
+        "best_data_epoch": best_data_epoch if best_data_state is not None else None,
+        "best_data_alpha": best_data_alpha,
+        "best_data_loss": best_data_loss if best_data_state is not None else None,
+    }
+
     return (loss_history, components_history, alpha_history, val_history,
-            best_state, best_alpha, best_epoch)
+            best_state, best_alpha, best_epoch, diagnostics)

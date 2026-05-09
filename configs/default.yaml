@@ -45,6 +45,7 @@ pinn:
   inverse:
     initial_alpha: 0.005
     num_observation: 200
+    num_sensor_locations: 20
     noise_level: 0.01
     lambda_data: 10.0
     alpha_lr: 0.005

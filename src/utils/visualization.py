@@ -73,8 +73,12 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
         ts_data: dict, keys: 'times', 'locations', 'u_pred', 'u_exact'
         cs_data: dict, keys: 'y', 'u_pred', 'u_exact'
         T_train: 训练时间上限，画竖线区分训练/验证域
-        obs_data: dict, keys: 't_train', 'u_train', 'u_pred_train',
-                  't_val', 'u_val', 'u_pred_val'（仅反问题）
+        obs_data: dict, keys: 't_train', 'u_train' (5个代表点),
+                  't_val', 'u_val' (5个代表点, 可选),
+                  'ts_u_exact_train', 'ts_u_pred_train' (时间序列曲线),
+                  'ts_u_exact_val', 'ts_u_pred_val',
+                  'T_end', 'u_obs_all', 'u_pred_all' (完整数据, ObsVSPred用),
+                  'u_obs_val_all', 'u_pred_val_all' (可选)
     """
     has_row2 = ts_data is not None and cs_data is not None
     has_row3 = obs_data is not None
@@ -153,48 +157,68 @@ def plot_comparison_2x3(nodes, u_pred, u_exact, t_val, filename=None, method="PI
 
     # Row 3: 观测数据（仅反问题）
     if has_row3:
+        n_ts = 100
+        ts_t = np.linspace(0, obs_data["T_end"], n_ts)
+        obs_colors = ["#1f77b4", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+        n_train_show = len(obs_data["ts_u_exact_train"])
+        n_val_show = len(obs_data.get("ts_u_exact_val") or [])
+        has_val_obs = n_val_show > 0
+
         # 训练观测拟合
         ax = axes[2, 0]
-        ax.scatter(obs_data["t_train"], obs_data["u_train"],
-                   s=10, alpha=0.5, c="darkorange", label="观测值")
-        ax.scatter(obs_data["t_train"], obs_data["u_pred_train"],
-                   s=10, alpha=0.5, c="purple", marker="x", label="模型预测")
+        for i in range(n_train_show):
+            c = obs_colors[i % len(obs_colors)]
+            ax.plot(ts_t, obs_data["ts_u_exact_train"][i], color=c, linestyle="-",
+                    alpha=0.7, linewidth=0.8)
+            ax.plot(ts_t, obs_data["ts_u_pred_train"][i], color=c, linestyle="--",
+                    alpha=0.7, linewidth=0.8)
+            ot, ou = obs_data["obs_t_train"][i], obs_data["obs_u_train"][i]
+            if len(ot) > 0:
+                ax.plot(ot, ou, "o", color=c, markersize=5, markeredgewidth=1.5,
+                        markerfacecolor="none")
         if T_train is not None:
             _add_train_val_split(ax, T_train)
         ax.set_xlabel("t")
         ax.set_ylabel("u")
-        ax.set_title("训练观测拟合")
-        ax.legend(fontsize=7)
+        ax.set_title(f"训练观测拟合 ({n_train_show}传感器)")
         ax.grid(True, alpha=0.3)
 
         # 验证观测拟合
         ax = axes[2, 1]
-        if obs_data.get("t_val") is not None:
-            ax.scatter(obs_data["t_val"], obs_data["u_val"],
-                       s=10, alpha=0.5, c="darkorange", label="观测值")
-            ax.scatter(obs_data["t_val"], obs_data["u_pred_val"],
-                       s=10, alpha=0.5, c="purple", marker="x", label="模型预测")
+        if has_val_obs:
+            n_val_with_data = sum(1 for ot in obs_data["obs_t_val"] if len(ot) > 0)
+            for i in range(n_val_show):
+                c = obs_colors[i % len(obs_colors)]
+                ax.plot(ts_t, obs_data["ts_u_exact_val"][i], color=c, linestyle="-",
+                        alpha=0.7, linewidth=0.8)
+                ax.plot(ts_t, obs_data["ts_u_pred_val"][i], color=c, linestyle="--",
+                        alpha=0.7, linewidth=0.8)
+                ot, ou = obs_data["obs_t_val"][i], obs_data["obs_u_val"][i]
+                if len(ot) > 0:
+                    ax.plot(ot, ou, "o", color=c, markersize=5, markeredgewidth=1.5,
+                            markerfacecolor="none")
         else:
+            n_val_with_data = 0
             ax.text(0.5, 0.5, "无验证观测数据", transform=ax.transAxes,
                     ha="center", va="center", fontsize=10, color="gray")
         if T_train is not None:
             _add_train_val_split(ax, T_train)
         ax.set_xlabel("t")
         ax.set_ylabel("u")
-        ax.set_title("验证观测拟合")
-        ax.legend(fontsize=7)
+        ax.set_title(f"验证观测拟合 ({n_val_with_data}传感器)")
         ax.grid(True, alpha=0.3)
 
         # 观测 vs 预测散点图
         ax = axes[2, 2]
-        ax.scatter(obs_data["u_train"], obs_data["u_pred_train"],
+        ax.scatter(obs_data["u_obs_all"], obs_data["u_pred_all"],
                    s=10, alpha=0.5, c="darkorange", label="训练")
-        if obs_data.get("u_val") is not None:
-            ax.scatter(obs_data["u_val"], obs_data["u_pred_val"],
+        if obs_data.get("u_obs_val_all") is not None:
+            ax.scatter(obs_data["u_obs_val_all"], obs_data["u_pred_val_all"],
                        s=10, alpha=0.5, c="purple", marker="x", label="验证")
-        all_u = np.concatenate([obs_data["u_train"], obs_data["u_pred_train"]])
-        if obs_data.get("u_val") is not None:
-            all_u = np.concatenate([all_u, obs_data["u_val"], obs_data["u_pred_val"]])
+        all_u = np.concatenate([obs_data["u_obs_all"], obs_data["u_pred_all"]])
+        if obs_data.get("u_obs_val_all") is not None:
+            all_u = np.concatenate([all_u, obs_data["u_obs_val_all"],
+                                    obs_data["u_pred_val_all"]])
         umin, umax = all_u.min(), all_u.max()
         margin = (umax - umin) * 0.05
         ax.plot([umin - margin, umax + margin], [umin - margin, umax + margin],

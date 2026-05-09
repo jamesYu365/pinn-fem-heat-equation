@@ -43,11 +43,24 @@ def validate_validation_counts(n_col, n_ic, n_bc):
         )
 
 
-def generate_observation_data(n_points, T_end, true_alpha, noise_level, device):
-    """用解析解生成稀疏带噪声的观测数据。"""
-    x_obs = torch.rand(n_points, 1, device=device)
-    y_obs = torch.rand(n_points, 1, device=device)
-    t_obs = torch.rand(n_points, 1, device=device) * T_end
+def generate_observation_data(n_sensors, n_times, T_end, true_alpha, noise_level,
+                              device, T_start=0.0):
+    """用解析解生成传感器式稀疏带噪声观测数据。
+
+    先固定 n_sensors 个空间位置，再在每个位置采 n_times 个时间点。
+    总观测数 = n_sensors * n_times。
+    """
+    x_sensor = torch.rand(n_sensors, 1, device=device)
+    y_sensor = torch.rand(n_sensors, 1, device=device)
+    if n_sensors <= 0 or n_times <= 0:
+        empty = torch.empty(0, 1, device=device)
+        return empty, empty, empty, empty
+
+    t_samples = T_start + torch.rand(n_times, 1, device=device) * (T_end - T_start)
+
+    x_obs = x_sensor.repeat_interleave(n_times, dim=0)
+    y_obs = y_sensor.repeat_interleave(n_times, dim=0)
+    t_obs = t_samples.repeat(n_sensors, 1)
 
     u_exact = case1_exact(
         x_obs.cpu().numpy().flatten(),
@@ -59,6 +72,35 @@ def generate_observation_data(n_points, T_end, true_alpha, noise_level, device):
     u_obs = u_obs + torch.randn_like(u_obs) * noise_level
 
     return x_obs, y_obs, t_obs, u_obs
+
+
+def validate_sensor_config(n_sensors, n_times, n_train_sensors,
+                           n_val_sensors, num_observation, val_time_ratio):
+    """校验反问题传感器观测配置，避免空观测或隐式改变观测数。"""
+    if not (0.0 < val_time_ratio <= 1.0):
+        raise ValueError(f"val_time_ratio 必须在 (0, 1] 内，当前为 {val_time_ratio}。")
+    if n_sensors <= 0:
+        raise ValueError("num_sensor_locations 必须为正整数。")
+    if num_observation <= 0:
+        raise ValueError("num_observation 必须为正整数。")
+    if n_sensors > num_observation:
+        raise ValueError(
+            "num_sensor_locations 不能大于 num_observation，"
+            f"当前为 {n_sensors} > {num_observation}。"
+        )
+    if num_observation % n_sensors != 0:
+        raise ValueError(
+            "num_observation 必须能被 num_sensor_locations 整除，"
+            f"当前为 {num_observation} / {n_sensors}。"
+        )
+    if n_times <= 0:
+        raise ValueError("每个传感器的时间点数必须为正整数。")
+    if n_train_sensors <= 0:
+        raise ValueError(
+            "训练传感器数量为 0。请增大 val_time_ratio 或减少验证比例。"
+        )
+    if n_val_sensors < 0:
+        raise ValueError("验证传感器数量不能为负数。")
 
 
 def main():
@@ -105,35 +147,38 @@ def main():
     os.makedirs(fig_dir, exist_ok=True)
     print(f"实验目录: {run_dir}")
 
-    # ---- 1. 观测数据（按时间划分训练/验证） ----
-    n_obs = inv_cfg["num_observation"]
+    # ---- 1. 观测数据（传感器模式：train/val 传感器空间完全分开） ----
+    num_observation_cfg = int(inv_cfg["num_observation"])
+    n_sensors = int(inv_cfg.get("num_sensor_locations", num_observation_cfg))
+    if n_sensors <= 0:
+        raise ValueError("num_sensor_locations 必须为正整数。")
+    n_times = num_observation_cfg // n_sensors
     noise_level = inv_cfg["noise_level"]
-    # 先在全时间域生成，再按时间拆分
-    x_obs_all, y_obs_all, t_obs_all, u_obs_all = generate_observation_data(
-        n_obs, T_end, true_alpha, noise_level, device,
+    n_train_sensors = int(n_sensors * val_time_ratio) if time_generalization else n_sensors
+    n_val_sensors = n_sensors - n_train_sensors
+    validate_sensor_config(
+        n_sensors, n_times, n_train_sensors, n_val_sensors,
+        num_observation_cfg, val_time_ratio,
     )
-    if time_generalization:
-        train_mask = t_obs_all.flatten() <= T_train
-        val_mask = ~train_mask
-        x_obs, y_obs, t_obs, u_obs = (
-            x_obs_all[train_mask], y_obs_all[train_mask],
-            t_obs_all[train_mask], u_obs_all[train_mask],
+
+    # 训练传感器：独立空间位置，采样 t ∈ [0, T_train]
+    x_obs, y_obs, t_obs, u_obs = generate_observation_data(
+        n_train_sensors, n_times, T_train, true_alpha, noise_level, device,
+    )
+    print(f"传感器: 训练 {n_train_sensors} 个位置 × {n_times} 时间点 "
+          f"= {n_train_sensors * n_times} 点, 噪声 σ={noise_level}")
+
+    # 验证传感器：另一批独立空间位置；时间泛化时只采外推域
+    if n_val_sensors > 0:
+        val_obs_t_start = T_train if time_generalization else 0.0
+        x_obs_val, y_obs_val, t_obs_val, u_obs_val = generate_observation_data(
+            n_val_sensors, n_times, T_end, true_alpha, noise_level, device,
+            T_start=val_obs_t_start,
         )
-        if val_mask.sum() > 0:
-            x_obs_val, y_obs_val, t_obs_val, u_obs_val = (
-                x_obs_all[val_mask], y_obs_all[val_mask],
-                t_obs_all[val_mask], u_obs_all[val_mask],
-            )
-        else:
-            x_obs_val = y_obs_val = t_obs_val = u_obs_val = None
-            print("  警告：所有观测数据都在训练域内，验证观测数据为空")
-        n_val_obs = int(val_mask.sum()) if x_obs_val is not None else 0
-        print(f"观测数据: {n_obs} 点 (训练 {int(train_mask.sum())}, "
-              f"验证 {n_val_obs}), 噪声 σ={noise_level}")
+        print(f"         验证 {n_val_sensors} 个位置 × {n_times} 时间点 "
+              f"= {n_val_sensors * n_times} 点, t∈[{val_obs_t_start:.3f}, {T_end:.3f}]")
     else:
-        x_obs, y_obs, t_obs, u_obs = x_obs_all, y_obs_all, t_obs_all, u_obs_all
         x_obs_val = y_obs_val = t_obs_val = u_obs_val = None
-        print(f"观测数据: {n_obs} 点, 噪声 σ={noise_level}")
 
     # ---- 2. PDE/IC/BC 配点（训练 t∈[0, T_train]） ----
     n_col = pinn_cfg["num_collocation"]
@@ -223,7 +268,7 @@ def main():
     }
 
     (loss_history, components_history, alpha_history, val_history,
-     best_state, best_alpha, best_epoch) = train_inverse(
+     best_state, best_alpha, best_epoch, inverse_diagnostics) = train_inverse(
         model,
         x_r, y_r, t_r,
         x_ic, y_ic,
@@ -302,9 +347,32 @@ def main():
         "layers": layers,
         "total_params": total_params,
         "epochs": pinn_cfg["epochs"],
-        "num_observation": n_obs,
+        "num_observation": int(n_train_sensors * n_times),
+        "num_observation_config": int(num_observation_cfg),
+        "num_sensor_locations": int(n_sensors),
+        "num_train_sensors": int(n_train_sensors),
+        "num_val_sensors": int(n_val_sensors),
+        "num_times_per_sensor": int(n_times),
         "noise_level": noise_level,
         "best_epoch": best_epoch,
+        "final_alpha": float(inverse_diagnostics["final_alpha"]),
+        "final_train_data_loss": (
+            float(inverse_diagnostics["final_train_data_loss"])
+            if inverse_diagnostics["final_train_data_loss"] is not None else None
+        ),
+        "final_val_data_loss": (
+            float(inverse_diagnostics["final_val_data_loss"])
+            if inverse_diagnostics["final_val_data_loss"] is not None else None
+        ),
+        "best_data_epoch": inverse_diagnostics["best_data_epoch"],
+        "best_data_alpha": (
+            float(inverse_diagnostics["best_data_alpha"])
+            if inverse_diagnostics["best_data_alpha"] is not None else None
+        ),
+        "best_data_loss": (
+            float(inverse_diagnostics["best_data_loss"])
+            if inverse_diagnostics["best_data_loss"] is not None else None
+        ),
         "final_loss": float(loss_history[-1]),
         "best_val_loss": float(best_val) if best_val else None,
         "eval_times": eval_times,
@@ -326,13 +394,72 @@ def main():
             u_pred_obs_val = model(x_obs_val, y_obs_val, t_obs_val).cpu().numpy().flatten()
     u_exact_final = case1_exact(x_flat, y_flat, T_end, true_alpha)
 
+    # 为观测拟合图选代表性传感器，画时间序列
+    n_show = 5
+    n_ts = 100
+    ts_t = np.linspace(0, T_end, n_ts)
+    ts_t_tensor = torch.tensor(ts_t, dtype=torch.float32, device=device).unsqueeze(1)
+
+    # 训练传感器位置
+    x_sensor_train = x_obs.cpu().numpy().reshape(n_train_sensors, n_times)[:, 0]
+    y_sensor_train = y_obs.cpu().numpy().reshape(n_train_sensors, n_times)[:, 0]
+    t_obs_np = t_obs.cpu().numpy().flatten()
+    u_obs_np = u_obs.cpu().numpy().flatten()
+    show_train = np.linspace(0, n_train_sensors - 1, min(n_show, n_train_sensors), dtype=int)
+
+    ts_u_exact_train, ts_u_pred_train = [], []
+    obs_t_train, obs_u_train = [], []
+
+    with torch.no_grad():
+        for si in show_train:
+            sx, sy = x_sensor_train[si], y_sensor_train[si]
+            x_pt = torch.full((n_ts, 1), sx, dtype=torch.float32, device=device)
+            y_pt = torch.full((n_ts, 1), sy, dtype=torch.float32, device=device)
+            ts_u_pred_train.append(model(x_pt, y_pt, ts_t_tensor).cpu().numpy().flatten())
+            ts_u_exact_train.append(
+                case1_exact(np.full(n_ts, sx), np.full(n_ts, sy), ts_t, true_alpha))
+            # 该训练传感器的所有观测
+            mask = np.arange(si * n_times, (si + 1) * n_times)
+            obs_t_train.append(t_obs_np[mask])
+            obs_u_train.append(u_obs_np[mask])
+
+    # 验证传感器位置
+    ts_u_exact_val, ts_u_pred_val = [], []
+    obs_t_val, obs_u_val = [], []
+    t_obs_val_np = u_obs_val_np = None
+    if x_obs_val is not None:
+        x_sensor_val = x_obs_val.cpu().numpy().reshape(n_val_sensors, n_times)[:, 0]
+        y_sensor_val = y_obs_val.cpu().numpy().reshape(n_val_sensors, n_times)[:, 0]
+        t_obs_val_np = t_obs_val.cpu().numpy().flatten()
+        u_obs_val_np = u_obs_val.cpu().numpy().flatten()
+        show_val = np.linspace(0, n_val_sensors - 1, min(n_show, n_val_sensors), dtype=int)
+
+        with torch.no_grad():
+            for si in show_val:
+                sx, sy = x_sensor_val[si], y_sensor_val[si]
+                x_pt = torch.full((n_ts, 1), sx, dtype=torch.float32, device=device)
+                y_pt = torch.full((n_ts, 1), sy, dtype=torch.float32, device=device)
+                ts_u_pred_val.append(model(x_pt, y_pt, ts_t_tensor).cpu().numpy().flatten())
+                ts_u_exact_val.append(
+                    case1_exact(np.full(n_ts, sx), np.full(n_ts, sy), ts_t, true_alpha))
+                mask = np.arange(si * n_times, (si + 1) * n_times)
+                obs_t_val.append(t_obs_val_np[mask])
+                obs_u_val.append(u_obs_val_np[mask])
+
     obs_plot_data = {
-        "t_train": t_obs.cpu().numpy().flatten(),
-        "u_train": u_obs.cpu().numpy().flatten(),
-        "u_pred_train": u_pred_obs_train,
-        "t_val": t_obs_val.cpu().numpy().flatten() if x_obs_val is not None else None,
-        "u_val": u_obs_val.cpu().numpy().flatten() if x_obs_val is not None else None,
-        "u_pred_val": u_pred_obs_val,
+        "obs_t_train": obs_t_train,
+        "obs_u_train": obs_u_train,
+        "obs_t_val": obs_t_val,
+        "obs_u_val": obs_u_val,
+        "ts_u_exact_train": ts_u_exact_train,
+        "ts_u_pred_train": ts_u_pred_train,
+        "ts_u_exact_val": ts_u_exact_val,
+        "ts_u_pred_val": ts_u_pred_val,
+        "T_end": T_end,
+        "u_obs_all": u_obs_np,
+        "u_pred_all": u_pred_obs_train,
+        "u_obs_val_all": u_obs_val_np,
+        "u_pred_val_all": u_pred_obs_val,
     }
 
     plot_comparison_2x3(
